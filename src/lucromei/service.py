@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
@@ -83,11 +84,12 @@ class LedgerService:
         if existing := self._find_message(message_id):
             return self._processed(existing, whatsapp_number, duplicate=True)
         parsed = parse_transaction(text)
+        canonical_number = normalize_whatsapp_number(whatsapp_number)
         business = self.session.scalar(
-            select(Business).where(Business.whatsapp_number == whatsapp_number)
+            select(Business).where(Business.whatsapp_number == canonical_number)
         )
         if business is None:
-            business = Business(whatsapp_number=whatsapp_number)
+            business = Business(whatsapp_number=canonical_number)
             self.session.add(business)
             self.session.flush()
         inbound = InboundMessage(
@@ -128,6 +130,7 @@ class LedgerService:
         description=None,
         occurred_at=None,
         reason=None,
+        commit: bool = True,
     ) -> EffectiveTransaction:
         transaction = self._get_transaction(transaction_id)
         if effective_transaction(transaction).reversed:
@@ -148,18 +151,51 @@ class LedgerService:
         transaction.events.append(
             TransactionEvent(event_type="corrected", changes=changes, reason=reason)
         )
-        self.session.commit()
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
         return effective_transaction(transaction)
 
-    def reverse(self, transaction_id: str, *, reason=None) -> EffectiveTransaction:
+    def reverse(
+        self, transaction_id: str, *, reason=None, commit: bool = True
+    ) -> EffectiveTransaction:
         transaction = self._get_transaction(transaction_id)
         if effective_transaction(transaction).reversed:
             raise LedgerError("A transação já foi desfeita.")
         transaction.events.append(
             TransactionEvent(event_type="reversed", changes={}, reason=reason)
         )
-        self.session.commit()
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
         return effective_transaction(transaction)
+
+    def latest_transaction(
+        self,
+        whatsapp_number: str,
+        transaction_type: TransactionType | None = None,
+    ) -> EffectiveTransaction | None:
+        canonical_number = normalize_whatsapp_number(whatsapp_number)
+        business = self.session.scalar(
+            select(Business).where(Business.whatsapp_number == canonical_number)
+        )
+        if business is None:
+            return None
+        transactions = self.session.scalars(
+            select(Transaction)
+            .options(selectinload(Transaction.events))
+            .where(Transaction.business_id == business.id)
+            .order_by(Transaction.occurred_at.desc(), Transaction.created_at.desc())
+        ).all()
+        for transaction in transactions:
+            current = effective_transaction(transaction)
+            if not current.reversed and (
+                transaction_type is None or current.transaction_type is transaction_type
+            ):
+                return current
+        return None
 
     def monthly_summary(self, whatsapp_number: str, year: int, month: int) -> Summary:
         start = datetime(year, month, 1, tzinfo=UTC)
@@ -168,8 +204,9 @@ class LedgerService:
             if month == 12
             else datetime(year, month + 1, 1, tzinfo=UTC)
         )
+        canonical_number = normalize_whatsapp_number(whatsapp_number)
         business = self.session.scalar(
-            select(Business).where(Business.whatsapp_number == whatsapp_number)
+            select(Business).where(Business.whatsapp_number == canonical_number)
         )
         if business is None:
             return Summary(start, end, 0, 0, 0)
@@ -237,3 +274,8 @@ def _snapshot(parsed: ParsedTransaction) -> dict[str, str | int]:
         "description": parsed.description,
         "occurred_at": parsed.occurred_at.isoformat(),
     }
+
+
+def normalize_whatsapp_number(number: str) -> str:
+    """Store WhatsApp identifiers as digits, independent of a leading plus sign."""
+    return re.sub(r"\D", "", number)

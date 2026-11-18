@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from sqlalchemy.orm import Session
 
 from lucromei.config import get_settings
+from lucromei.conversation import ConversationService
 from lucromei.db import get_session
 from lucromei.domain import ParseError
 from lucromei.schemas import (
@@ -28,7 +29,7 @@ SessionDep = Annotated[Session, Depends(get_session)]
 
 app = FastAPI(
     title="LucroMEI API",
-    version="0.2.0",
+    version="0.3.0",
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
 )
 app.state.whatsapp_sender = MockOutboundSender()
@@ -64,9 +65,19 @@ async def receive_whatsapp_webhook(
 
     payload = await request.json()
     messages = extract_text_messages(payload)
-    processed = duplicates = clarification_required = 0
+    processed = commands = duplicates = clarification_required = 0
     service = LedgerService(session)
     for message in messages:
+        command = ConversationService(session).handle(
+            message_id=message.message_id,
+            whatsapp_number=message.sender,
+            text=message.text,
+        )
+        if command is not None:
+            commands += 1
+            duplicates += int(command.duplicate)
+            app.state.whatsapp_sender.send_text(message.sender, command.reply)
+            continue
         try:
             result = service.process(
                 message_id=message.message_id,
@@ -94,9 +105,10 @@ async def receive_whatsapp_webhook(
     return {
         "received": True,
         "processed": processed,
+        "commands": commands,
         "duplicates": duplicates,
         "clarification_required": clarification_required,
-        "ignored": max(0, len(messages) - processed - clarification_required),
+        "ignored": max(0, len(messages) - processed - commands - clarification_required),
     }
 
 

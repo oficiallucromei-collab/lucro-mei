@@ -25,6 +25,16 @@ class Business(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class CommandReceipt(Base):
+    __tablename__ = "command_receipts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    external_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id"), index=True)
+    command_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    response_text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class InboundMessage(Base):
     __tablename__ = "inbound_messages"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
