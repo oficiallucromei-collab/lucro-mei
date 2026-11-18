@@ -1,0 +1,1 @@
+"""LucroMEI application package."""
