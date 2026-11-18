@@ -26,6 +26,7 @@ This initial scaffold includes:
 - deterministic monthly summaries separating personal withdrawals;
 - WhatsApp Cloud API webhook verification and signature validation;
 - normalized inbound text messages with mocked outbound confirmations;
+- idempotent WhatsApp commands for undo, corrections, and monthly summaries;
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
 
@@ -59,8 +60,7 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
 
 ## Roadmap
 
-1. Conversation commands for undo, corrections, and summaries.
-2. Production WhatsApp outbound sender and delivery observability.
-3. Structured AI fallback for messages that deterministic rules cannot classify.
-4. Minimal onboarding and subscription portal.
+1. Production WhatsApp outbound sender and delivery observability.
+2. Structured AI fallback for messages that deterministic rules cannot classify.
+3. Minimal onboarding and subscription portal.
 
