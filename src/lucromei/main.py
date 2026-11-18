@@ -1,12 +1,26 @@
-from fastapi import FastAPI, HTTPException, status
+from typing import Annotated
 
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from sqlalchemy.orm import Session
+
+from lucromei.db import get_session
 from lucromei.domain import ParseError
-from lucromei.schemas import HealthResponse, InboundMessage, TransactionResponse
-from lucromei.service import ledger
+from lucromei.schemas import (
+    CorrectionRequest,
+    HealthResponse,
+    InboundMessage,
+    MonthlySummaryResponse,
+    ReversalRequest,
+    TransactionResponse,
+    TransactionStateResponse,
+)
+from lucromei.service import LedgerError, LedgerService, TransactionNotFound
+
+SessionDep = Annotated[Session, Depends(get_session)]
 
 app = FastAPI(
     title="LucroMEI API",
-    version="0.1.0",
+    version="0.2.0",
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
 )
 
@@ -16,30 +30,99 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
-@app.post(
-    "/v1/messages",
-    response_model=TransactionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def process_message(payload: InboundMessage) -> TransactionResponse:
+@app.post("/v1/messages", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED)
+def process_message(
+    payload: InboundMessage,
+    session: SessionDep,
+) -> TransactionResponse:
     try:
-        result = ledger.process(
+        result = LedgerService(session).process(
             message_id=payload.message_id,
             whatsapp_number=payload.whatsapp_number,
             text=payload.text,
         )
     except ParseError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     transaction = result.transaction
     return TransactionResponse(
+        transaction_id=transaction.id,
         message_id=result.message_id,
         transaction_type=transaction.transaction_type,
         amount_cents=transaction.amount_cents,
         description=transaction.description,
         occurred_at=transaction.occurred_at,
         duplicate=result.duplicate,
+    )
+
+
+@app.post(
+    "/v1/transactions/{transaction_id}/corrections",
+    response_model=TransactionStateResponse,
+)
+def correct_transaction(
+    transaction_id: str,
+    payload: CorrectionRequest,
+    session: SessionDep,
+) -> TransactionStateResponse:
+    try:
+        transaction = LedgerService(session).correct(
+            transaction_id,
+            amount_cents=payload.amount_cents,
+            transaction_type=payload.transaction_type,
+            description=payload.description,
+            occurred_at=payload.occurred_at,
+            reason=payload.reason,
+        )
+    except TransactionNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LedgerError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _state_response(transaction)
+
+
+@app.post(
+    "/v1/transactions/{transaction_id}/reversal",
+    response_model=TransactionStateResponse,
+)
+def reverse_transaction(
+    transaction_id: str,
+    payload: ReversalRequest,
+    session: SessionDep,
+) -> TransactionStateResponse:
+    try:
+        transaction = LedgerService(session).reverse(transaction_id, reason=payload.reason)
+    except TransactionNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LedgerError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _state_response(transaction)
+
+
+@app.get("/v1/summaries/monthly", response_model=MonthlySummaryResponse)
+def monthly_summary(
+    whatsapp_number: str,
+    session: SessionDep,
+    year: int = Query(ge=2020, le=2100),
+    month: int = Query(ge=1, le=12),
+) -> MonthlySummaryResponse:
+    summary = LedgerService(session).monthly_summary(whatsapp_number, year, month)
+    return MonthlySummaryResponse(
+        whatsapp_number=whatsapp_number,
+        period_start=summary.period_start,
+        period_end=summary.period_end,
+        income_cents=summary.income_cents,
+        expense_cents=summary.expense_cents,
+        withdrawal_cents=summary.withdrawal_cents,
+        operating_balance_cents=summary.operating_balance_cents,
+    )
+
+
+def _state_response(transaction) -> TransactionStateResponse:
+    return TransactionStateResponse(
+        transaction_id=transaction.id,
+        transaction_type=transaction.transaction_type,
+        amount_cents=transaction.amount_cents,
+        description=transaction.description,
+        occurred_at=transaction.occurred_at,
+        reversed=transaction.reversed,
     )
