@@ -1,8 +1,9 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
+from lucromei.config import get_settings
 from lucromei.db import get_session
 from lucromei.domain import ParseError
 from lucromei.schemas import (
@@ -15,6 +16,13 @@ from lucromei.schemas import (
     TransactionStateResponse,
 )
 from lucromei.service import LedgerError, LedgerService, TransactionNotFound
+from lucromei.whatsapp import (
+    InvalidWebhookSignature,
+    MockOutboundSender,
+    extract_text_messages,
+    format_confirmation,
+    verify_signature,
+)
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -23,11 +31,79 @@ app = FastAPI(
     version="0.2.0",
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
 )
+app.state.whatsapp_sender = MockOutboundSender()
 
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.get("/webhooks/whatsapp")
+def verify_whatsapp_webhook(
+    mode: str = Query(alias="hub.mode"),
+    token: str = Query(alias="hub.verify_token"),
+    challenge: str = Query(alias="hub.challenge"),
+) -> Response:
+    if mode != "subscribe" or not hmac_compare(token, get_settings().whatsapp_verify_token):
+        raise HTTPException(status_code=403, detail="Token de verificação inválido.")
+    return Response(content=challenge, media_type="text/plain")
+
+
+@app.post("/webhooks/whatsapp")
+async def receive_whatsapp_webhook(
+    request: Request,
+    session: SessionDep,
+    signature: str | None = Header(default=None, alias="X-Hub-Signature-256"),
+) -> dict[str, int | bool]:
+    body = await request.body()
+    try:
+        verify_signature(body, signature, get_settings().whatsapp_app_secret)
+    except InvalidWebhookSignature as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    payload = await request.json()
+    messages = extract_text_messages(payload)
+    processed = duplicates = clarification_required = 0
+    service = LedgerService(session)
+    for message in messages:
+        try:
+            result = service.process(
+                message_id=message.message_id,
+                whatsapp_number=message.sender,
+                text=message.text,
+            )
+        except ParseError:
+            clarification_required += 1
+            app.state.whatsapp_sender.send_text(
+                message.sender,
+                "Não entendi se isso é entrada, despesa ou retirada. "
+                "Envie uma operação por mensagem.",
+            )
+            continue
+        processed += 1
+        duplicates += int(result.duplicate)
+        app.state.whatsapp_sender.send_text(
+            message.sender,
+            format_confirmation(
+                result.transaction.transaction_type.value,
+                result.transaction.amount_cents,
+                result.duplicate,
+            ),
+        )
+    return {
+        "received": True,
+        "processed": processed,
+        "duplicates": duplicates,
+        "clarification_required": clarification_required,
+        "ignored": max(0, len(messages) - processed - clarification_required),
+    }
+
+
+def hmac_compare(left: str, right: str) -> bool:
+    import hmac
+
+    return hmac.compare_digest(left, right)
 
 
 @app.post("/v1/messages", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED)
