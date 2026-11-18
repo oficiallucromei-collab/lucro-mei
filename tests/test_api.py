@@ -1,13 +1,18 @@
+import hmac
+import json
 from collections.abc import Iterator
+from hashlib import sha256
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from lucromei.config import get_settings
 from lucromei.db import get_session
 from lucromei.main import app
 from lucromei.models import Base, InboundMessage, Transaction, TransactionEvent
+from lucromei.whatsapp import MockOutboundSender
 
 engine = create_engine(
     "sqlite://",
@@ -29,6 +34,9 @@ client = TestClient(app)
 def setup_function() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    get_settings().whatsapp_verify_token = "verify-test-token"
+    get_settings().whatsapp_app_secret = "test-app-secret"
+    app.state.whatsapp_sender = MockOutboundSender()
 
 
 def create_transaction(message_id: str, text: str) -> dict:
@@ -120,3 +128,96 @@ def test_summary_separates_personal_withdrawals() -> None:
     assert body["withdrawal_cents"] == 10000
     assert body["operating_balance_cents"] == 27500
     assert "não representa automaticamente" in body["disclaimer"]
+
+
+def whatsapp_payload(message_id: str, text: str, sender: str = "5511999999999") -> dict:
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "business-account-id",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "messages": [
+                                {
+                                    "from": sender,
+                                    "id": message_id,
+                                    "timestamp": "1795032000",
+                                    "type": "text",
+                                    "text": {"body": text},
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def signed_webhook(payload: dict, secret: str = "test-app-secret"):
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(secret.encode(), body, sha256).hexdigest()
+    return client.post(
+        "/webhooks/whatsapp",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "X-Hub-Signature-256": signature,
+        },
+    )
+
+
+def test_whatsapp_webhook_verification() -> None:
+    response = client.get(
+        "/webhooks/whatsapp",
+        params={
+            "hub.mode": "subscribe",
+            "hub.verify_token": "verify-test-token",
+            "hub.challenge": "challenge-123",
+        },
+    )
+    assert response.status_code == 200
+    assert response.text == "challenge-123"
+
+
+def test_whatsapp_webhook_rejects_invalid_signature_without_writing() -> None:
+    response = signed_webhook(whatsapp_payload("wamid.invalid", "Recebi 100"), "wrong")
+    assert response.status_code == 401
+    with TestingSession() as session:
+        assert session.query(InboundMessage).count() == 0
+
+
+def test_whatsapp_webhook_normalizes_processes_and_replies() -> None:
+    response = signed_webhook(whatsapp_payload("wamid.webhook", "Recebi 150 por um corte"))
+    assert response.status_code == 200
+    assert response.json() == {
+        "received": True,
+        "processed": 1,
+        "duplicates": 0,
+        "clarification_required": 0,
+        "ignored": 0,
+    }
+    sent = app.state.whatsapp_sender.sent_messages
+    assert len(sent) == 1
+    assert sent[0].recipient == "5511999999999"
+    assert "Entrada registrada: R$ 150,00" in sent[0].text
+
+
+def test_whatsapp_duplicate_delivery_does_not_duplicate_transaction() -> None:
+    payload = whatsapp_payload("wamid.duplicate", "Gastei 80 em produtos")
+    first = signed_webhook(payload)
+    second = signed_webhook(payload)
+    assert first.json()["duplicates"] == 0
+    assert second.json()["duplicates"] == 1
+    with TestingSession() as session:
+        assert session.query(Transaction).count() == 1
+
+
+def test_whatsapp_ambiguous_message_requests_clarification() -> None:
+    response = signed_webhook(whatsapp_payload("wamid.ambiguous", "Paguei 50 para João"))
+    assert response.json()["clarification_required"] == 1
+    assert "Não entendi" in app.state.whatsapp_sender.sent_messages[0].text
