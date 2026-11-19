@@ -60,6 +60,10 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
 
 ## Production WhatsApp configuration
 
+Set `LUCROMEI_ENVIRONMENT=production`. Direct ledger endpoints under `/v1` are
+available only in the local environment. Production ledger access uses the signed
+WhatsApp webhook.
+
 Set the Meta webhook callback to the service's HTTPS URL with the path
 `/webhooks/whatsapp`. The same path handles GET verification and signed POST events.
 Subscribe to the `messages` webhook field.

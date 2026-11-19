@@ -1,6 +1,16 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -132,7 +142,17 @@ def hmac_compare(left: str, right: str) -> bool:
     return hmac.compare_digest(left, right)
 
 
-@app.post("/v1/messages", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED)
+def require_local_ledger_api() -> None:
+    if get_settings().environment.strip().lower() != "local":
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+ledger_api = APIRouter(prefix="/v1", dependencies=[Depends(require_local_ledger_api)])
+
+
+@ledger_api.post(
+    "/messages", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED
+)
 def process_message(
     payload: InboundMessage,
     session: SessionDep,
@@ -157,8 +177,8 @@ def process_message(
     )
 
 
-@app.post(
-    "/v1/transactions/{transaction_id}/corrections",
+@ledger_api.post(
+    "/transactions/{transaction_id}/corrections",
     response_model=TransactionStateResponse,
 )
 def correct_transaction(
@@ -182,8 +202,8 @@ def correct_transaction(
     return _state_response(transaction)
 
 
-@app.post(
-    "/v1/transactions/{transaction_id}/reversal",
+@ledger_api.post(
+    "/transactions/{transaction_id}/reversal",
     response_model=TransactionStateResponse,
 )
 def reverse_transaction(
@@ -200,7 +220,7 @@ def reverse_transaction(
     return _state_response(transaction)
 
 
-@app.get("/v1/summaries/monthly", response_model=MonthlySummaryResponse)
+@ledger_api.get("/summaries/monthly", response_model=MonthlySummaryResponse)
 def monthly_summary(
     whatsapp_number: str,
     session: SessionDep,
@@ -228,3 +248,6 @@ def _state_response(transaction) -> TransactionStateResponse:
         occurred_at=transaction.occurred_at,
         reversed=transaction.reversed,
     )
+
+
+app.include_router(ledger_api)

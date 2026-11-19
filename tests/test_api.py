@@ -62,6 +62,21 @@ def test_health() -> None:
     assert client.get("/health").json() == {"status": "ok"}
 
 
+def test_production_disables_direct_ledger_api(monkeypatch) -> None:
+    monkeypatch.setattr(get_settings(), "environment", "production")
+
+    assert client.post("/v1/messages", json={}).status_code == 404
+    assert client.post("/v1/transactions/test/corrections", json={}).status_code == 404
+    assert client.post("/v1/transactions/test/reversal", json={}).status_code == 404
+    assert client.get("/v1/summaries/monthly").status_code == 404
+    assert client.get("/health").status_code == 200
+    assert client.get("/webhooks/whatsapp", params={
+        "hub.mode": "subscribe",
+        "hub.verify_token": "verify-test-token",
+        "hub.challenge": "challenge",
+    }).text == "challenge"
+
+
 def test_process_message_is_database_idempotent() -> None:
     first = create_transaction("wamid.123", "Recebi 150 por um corte")
     second = create_transaction("wamid.123", "Recebi 999 por outro corte")
