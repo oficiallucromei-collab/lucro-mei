@@ -77,8 +77,35 @@ Subscribe to the `messages` webhook field.
 | `LUCROMEI_WHATSAPP_GRAPH_API_VERSION` | Graph API version, defaults to `v25.0` |
 
 The app uses the Cloud API when both the access token and phone-number ID are set.
-Otherwise it uses the local mock sender. Store production credentials in a secret manager.
-The Docker container listens on the runtime `PORT` and defaults to 8080.
+Local development can use the mock sender. A Cloud Run service requires a complete
+production configuration at startup. Its runtime provides `PORT` and `K_SERVICE`.
+
+Before deploying, review the Cloud Run revision diff against the intended image,
+command, arguments, service account, ingress, and environment variable names. Use
+the image command and arguments and deploy a reviewed image digest. Configure the
+following values:
+
+- Set `LUCROMEI_ENVIRONMENT=production` and the expected Meta phone-number ID.
+  Set the Graph API version only when overriding the application's default.
+- Map `LUCROMEI_DATABASE_URL`, `LUCROMEI_WHATSAPP_VERIFY_TOKEN`,
+  `LUCROMEI_WHATSAPP_APP_SECRET`, and `LUCROMEI_WHATSAPP_ACCESS_TOKEN` to
+  pinned Secret Manager versions. Give a dedicated runtime service account
+  access to just those secrets. Use a `postgresql+psycopg` URL with
+  `sslmode=verify-full`, a trusted CA source such as `sslrootcert=system`,
+  and a limited database role for the service.
+- Restrict who can deploy revisions and act as the runtime service account.
+  Confirm that the webhook accepts the Meta verification challenge and signed
+  messages for the configured phone-number ID, and that `/v1` returns 404.
+
+[Cloud Run secret configuration](https://docs.cloud.google.com/run/docs/configuring/services/secrets)
+
+The container disables Uvicorn access logging because Meta sends the webhook
+verification token in the query string. Cloud Run request logs are separate.
+Before registering the callback, review log routing and exclude verification
+requests containing `hub.verify_token` from storage and export sinks. Rotate
+any verification token previously recorded in logs or saved in a deployment draft.
+
+[Cloud Run logging](https://docs.cloud.google.com/run/docs/logging)
 
 ## Roadmap
 

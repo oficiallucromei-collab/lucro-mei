@@ -1,4 +1,5 @@
 import hmac
+import re
 from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any, Protocol
@@ -80,30 +81,46 @@ def verify_signature(body: bytes, signature_header: str | None, app_secret: str)
         raise InvalidWebhookSignature("Assinatura do webhook inválida.")
 
 
-def extract_text_messages(payload: dict[str, Any]) -> list[WhatsAppTextMessage]:
-    """Normalize supported text messages and ignore delivery statuses or media."""
+def _object_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def extract_text_messages(
+    payload: Any, phone_number_id: str | None = None
+) -> list[WhatsAppTextMessage]:
+    """Normalize supported text messages for the configured WhatsApp number."""
 
     normalized: list[WhatsAppTextMessage] = []
-    if payload.get("object") != "whatsapp_business_account":
+    if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
         return normalized
-    for entry in payload.get("entry", []):
-        for change in entry.get("changes", []):
-            if change.get("field") != "messages":
+    for entry in _object_list(payload.get("entry")):
+        for change in _object_list(entry.get("changes")):
+            value = change.get("value")
+            if change.get("field") != "messages" or not isinstance(value, dict):
                 continue
-            for message in change.get("value", {}).get("messages", []):
-                text = message.get("text", {}).get("body")
-                if message.get("type") != "text" or not text:
+            metadata = value.get("metadata")
+            if phone_number_id is not None and (
+                not isinstance(metadata, dict) or metadata.get("phone_number_id") != phone_number_id
+            ):
+                continue
+            for message in _object_list(value.get("messages")):
+                text_data = message.get("text")
+                if message.get("type") != "text" or not isinstance(text_data, dict):
                     continue
+                text = text_data.get("body")
                 message_id = message.get("id")
                 sender = message.get("from")
-                if message_id and sender:
-                    normalized.append(
-                        WhatsAppTextMessage(
-                            message_id=message_id,
-                            sender=sender,
-                            text=text,
-                        )
-                    )
+                if (
+                    isinstance(text, str)
+                    and 0 < len(text) <= 4096
+                    and isinstance(message_id, str)
+                    and 0 < len(message_id) <= 255
+                    and isinstance(sender, str)
+                    and re.fullmatch(r"[+]?[0-9]{1,32}", sender)
+                ):
+                    normalized.append(WhatsAppTextMessage(message_id, sender, text))
     return normalized
 
 

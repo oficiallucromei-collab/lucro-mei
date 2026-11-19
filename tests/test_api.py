@@ -320,3 +320,29 @@ def test_command_without_applicable_transaction_is_safely_replayed() -> None:
     with TestingSession() as session:
         assert session.query(CommandReceipt).count() == 1
         assert session.query(TransactionEvent).count() == 0
+
+
+def test_webhook_rejects_oversized_body(monkeypatch) -> None:
+    monkeypatch.setattr("lucromei.main.MAX_WEBHOOK_BYTES", 32)
+    response = signed_webhook(whatsapp_payload("wamid.oversized", "Recebi 150"))
+    assert response.status_code == 413
+
+
+def test_webhook_ignores_other_phone_number_ids(monkeypatch) -> None:
+    monkeypatch.setattr(get_settings(), "whatsapp_phone_number_id", "123456")
+    payload = whatsapp_payload("wamid.other", "Recebi 150")
+    value = payload["entry"][0]["changes"][0]["value"]
+    value["metadata"] = {"phone_number_id": "654321"}
+    assert signed_webhook(payload).json()["processed"] == 0
+    assert not app.state.whatsapp_sender.sent_messages
+
+    value["metadata"] = {"phone_number_id": "123456"}
+    assert signed_webhook(payload).json()["processed"] == 1
+
+
+def test_webhook_duplicate_id_cannot_disclose_another_senders_ledger() -> None:
+    for message_id, message in [("wamid.entry", "Recebi 150"), ("wamid.command", "resumo mensal")]:
+        assert signed_webhook(whatsapp_payload(message_id, message)).status_code == 200
+        response = signed_webhook(whatsapp_payload(message_id, message, sender="5511888888888"))
+        assert response.json()["ignored"] == 1
+    assert len(app.state.whatsapp_sender.sent_messages) == 2

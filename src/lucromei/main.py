@@ -1,3 +1,6 @@
+import hmac
+import json
+import re
 from typing import Annotated
 
 from fastapi import (
@@ -14,7 +17,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from lucromei.config import get_settings
+from lucromei.config import get_settings, on_cloud_run
 from lucromei.conversation import ConversationService
 from lucromei.db import get_session
 from lucromei.domain import ParseError
@@ -27,7 +30,7 @@ from lucromei.schemas import (
     TransactionResponse,
     TransactionStateResponse,
 )
-from lucromei.service import LedgerError, LedgerService, TransactionNotFound
+from lucromei.service import LedgerError, LedgerService, MessageOwnerMismatch, TransactionNotFound
 from lucromei.whatsapp import (
     CloudApiOutboundSender,
     InvalidWebhookSignature,
@@ -37,14 +40,18 @@ from lucromei.whatsapp import (
     verify_signature,
 )
 
+MAX_WEBHOOK_BYTES = 3 * 1024 * 1024
+SIGNATURE_PATTERN = re.compile(r"sha256=[0-9a-f]{64}")
+
 SessionDep = Annotated[Session, Depends(get_session)]
 
+settings = get_settings()
 app = FastAPI(
     title="LucroMEI API",
+    openapi_url="/openapi.json" if settings.environment.strip().lower() == "local" else None,
     version="0.3.0",
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
 )
-settings = get_settings()
 if settings.whatsapp_access_token and settings.whatsapp_phone_number_id:
     app.state.whatsapp_sender = CloudApiOutboundSender(
         access_token=settings.whatsapp_access_token,
@@ -66,9 +73,17 @@ def verify_whatsapp_webhook(
     token: str = Query(alias="hub.verify_token"),
     challenge: str = Query(alias="hub.challenge"),
 ) -> Response:
-    if mode != "subscribe" or not hmac_compare(token, get_settings().whatsapp_verify_token):
+    verify_token = get_settings().whatsapp_verify_token
+    if (
+        mode != "subscribe"
+        or not verify_token
+        or verify_token == "change-me"
+        or not hmac.compare_digest(token.encode(), verify_token.encode())
+    ):
         raise HTTPException(status_code=403, detail="Token de verificação inválido.")
-    return Response(content=challenge, media_type="text/plain")
+    return Response(
+        content=challenge, media_type="text/plain", headers={"Cache-Control": "no-store"}
+    )
 
 
 @app.post("/webhooks/whatsapp")
@@ -77,22 +92,35 @@ async def receive_whatsapp_webhook(
     session: SessionDep,
     signature: str | None = Header(default=None, alias="X-Hub-Signature-256"),
 ) -> dict[str, int | bool]:
-    body = await request.body()
+    if not signature or not SIGNATURE_PATTERN.fullmatch(signature):
+        raise HTTPException(status_code=401, detail="Assinatura do webhook ausente ou inválida.")
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_WEBHOOK_BYTES:
+            raise HTTPException(status_code=413, detail="Webhook payload too large.")
+        body.extend(chunk)
     try:
-        verify_signature(body, signature, get_settings().whatsapp_app_secret)
+        verify_signature(bytes(body), signature, get_settings().whatsapp_app_secret)
     except InvalidWebhookSignature as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
-    payload = await request.json()
-    messages = extract_text_messages(payload)
+    try:
+        payload = json.loads(body)
+    except (ValueError, RecursionError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook JSON.") from exc
+    messages = extract_text_messages(payload, settings.whatsapp_phone_number_id)
     processed = commands = duplicates = clarification_required = 0
     service = LedgerService(session)
     for message in messages:
-        command = ConversationService(session).handle(
-            message_id=message.message_id,
-            whatsapp_number=message.sender,
-            text=message.text,
-        )
+        try:
+            command = ConversationService(session).handle(
+                message_id=message.message_id,
+                whatsapp_number=message.sender,
+                text=message.text,
+            )
+        except MessageOwnerMismatch:
+            continue
         if command is not None:
             commands += 1
             duplicates += int(command.duplicate)
@@ -106,6 +134,8 @@ async def receive_whatsapp_webhook(
                 whatsapp_number=message.sender,
                 text=message.text,
             )
+        except MessageOwnerMismatch:
+            continue
         except ParseError:
             clarification_required += 1
             await run_in_threadpool(
@@ -136,14 +166,8 @@ async def receive_whatsapp_webhook(
     }
 
 
-def hmac_compare(left: str, right: str) -> bool:
-    import hmac
-
-    return hmac.compare_digest(left, right)
-
-
 def require_local_ledger_api() -> None:
-    if get_settings().environment.strip().lower() != "local":
+    if on_cloud_run() or get_settings().environment.strip().lower() != "local":
         raise HTTPException(status_code=404, detail="Not found")
 
 
@@ -165,6 +189,8 @@ def process_message(
         )
     except ParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except MessageOwnerMismatch as exc:
+        raise HTTPException(status_code=409, detail="Message identifier conflict.") from exc
     transaction = result.transaction
     return TransactionResponse(
         transaction_id=transaction.id,

@@ -20,6 +20,8 @@ class ParsedTransaction:
     confidence: Decimal
 
 
+MAX_AMOUNT_CENTS = 2_147_483_647
+
 _AMOUNT_RE = re.compile(r"(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)", re.IGNORECASE)
 _INCOME_WORDS = ("recebi", "ganhei", "entrou", "vendi", "fiz")
 _EXPENSE_WORDS = ("gastei", "paguei", "comprei", "custou", "despesa")
@@ -69,8 +71,13 @@ def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTra
     if amount_cents <= 0:
         raise ParseError("O valor deve ser maior que zero.")
 
+    if amount_cents > MAX_AMOUNT_CENTS:
+        raise ParseError("O valor informado excede o limite permitido.")
+
     description = (normalized[: matches[0].start()] + normalized[matches[0].end() :]).strip(" .,-")
     description = description or detected[0].value
+    if len(description) > 500:
+        raise ParseError("A descrição excede o limite de 500 caracteres.")
 
     return ParsedTransaction(
         transaction_type=detected[0],

@@ -8,9 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from lucromei.domain import TransactionType
+from lucromei.domain import MAX_AMOUNT_CENTS, TransactionType
 from lucromei.models import Business, CommandReceipt
-from lucromei.service import LedgerService, normalize_whatsapp_number
+from lucromei.service import LedgerService, MessageOwnerMismatch, normalize_whatsapp_number
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +53,7 @@ class ConversationService:
         now: datetime | None = None,
     ) -> CommandResult | None:
         if receipt := self._find_receipt(message_id):
-            return self._result(receipt, duplicate=True)
+            return self._duplicate_result(receipt, whatsapp_number)
 
         normalized = _normalize(text)
         if normalized in {"desfazer", "desfazer ultima", "desfazer ultimo"}:
@@ -113,7 +113,7 @@ class ConversationService:
             existing = self._find_receipt(message_id)
             if existing is None:
                 raise
-            return self._result(existing, duplicate=True)
+            return self._duplicate_result(existing, whatsapp_number)
         return CommandResult(command_type, reply)
 
     def _find_receipt(self, message_id: str) -> CommandReceipt | None:
@@ -132,9 +132,11 @@ class ConversationService:
             self.session.flush()
         return business
 
-    @staticmethod
-    def _result(receipt: CommandReceipt, *, duplicate: bool) -> CommandResult:
-        return CommandResult(receipt.command_type, receipt.response_text, duplicate)
+    def _duplicate_result(self, receipt: CommandReceipt, number: str) -> CommandResult:
+        owner = self.session.get(Business, receipt.business_id)
+        if owner is None or owner.whatsapp_number != normalize_whatsapp_number(number):
+            raise MessageOwnerMismatch("Message identifier belongs to a different sender.")
+        return CommandResult(receipt.command_type, receipt.response_text, duplicate=True)
 
 
 def _normalize(text: str) -> str:
@@ -154,7 +156,7 @@ def _parse_amount(raw: str) -> int | None:
     except InvalidOperation:
         return None
     cents = int(value * 100)
-    return cents if cents > 0 else None
+    return cents if 0 < cents <= MAX_AMOUNT_CENTS else None
 
 
 def _money(cents: int) -> str:

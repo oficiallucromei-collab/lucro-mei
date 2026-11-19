@@ -14,6 +14,10 @@ class LedgerError(ValueError):
     pass
 
 
+class MessageOwnerMismatch(LedgerError):
+    pass
+
+
 class TransactionNotFound(LedgerError):
     pass
 
@@ -259,6 +263,10 @@ class LedgerService:
         *,
         duplicate: bool,
     ) -> ProcessedMessage:
+        if duplicate:
+            owner = self.session.get(Business, inbound.business_id)
+            if owner is None or owner.whatsapp_number != normalize_whatsapp_number(number):
+                raise MessageOwnerMismatch("Message identifier belongs to a different sender.")
         return ProcessedMessage(
             inbound.external_id,
             number,
