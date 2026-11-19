@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./lucromei.db"
     whatsapp_verify_token: str = "change-me"
     whatsapp_app_secret: str = "change-me"
+    whatsapp_access_token: str | None = None
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_graph_api_version: str = "v25.0"
 
 
 @lru_cache

@@ -25,7 +25,7 @@ This initial scaffold includes:
 - immutable correction and reversal events;
 - deterministic monthly summaries separating personal withdrawals;
 - WhatsApp Cloud API webhook verification and signature validation;
-- normalized inbound text messages with mocked outbound confirmations;
+- normalized inbound text messages with WhatsApp Cloud API or mocked outbound replies;
 - idempotent WhatsApp commands for undo, corrections, and monthly summaries;
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
@@ -58,9 +58,27 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
   }'
 ```
 
+## Production WhatsApp configuration
+
+Set the Meta webhook callback to the service's HTTPS URL with the path
+`/webhooks/whatsapp`. The same path handles GET verification and signed POST events.
+Subscribe to the `messages` webhook field.
+
+| Variable | Purpose |
+| --- | --- |
+| `LUCROMEI_WHATSAPP_VERIFY_TOKEN` | Shared token for webhook verification |
+| `LUCROMEI_WHATSAPP_APP_SECRET` | Meta app secret for validating webhook signatures |
+| `LUCROMEI_WHATSAPP_ACCESS_TOKEN` | Production access token for sending replies |
+| `LUCROMEI_WHATSAPP_PHONE_NUMBER_ID` | Meta phone-number ID for sending replies |
+| `LUCROMEI_WHATSAPP_GRAPH_API_VERSION` | Graph API version, defaults to `v25.0` |
+
+The app uses the Cloud API when both the access token and phone-number ID are set.
+Otherwise it uses the local mock sender. Store production credentials in a secret manager.
+The Docker container listens on the runtime `PORT` and defaults to 8080.
+
 ## Roadmap
 
-1. Production WhatsApp outbound sender and delivery observability.
+1. WhatsApp delivery observability.
 2. Structured AI fallback for messages that deterministic rules cannot classify.
 3. Minimal onboarding and subscription portal.
 

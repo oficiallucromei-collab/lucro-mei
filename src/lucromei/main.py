@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from lucromei.config import get_settings
 from lucromei.conversation import ConversationService
@@ -18,6 +19,7 @@ from lucromei.schemas import (
 )
 from lucromei.service import LedgerError, LedgerService, TransactionNotFound
 from lucromei.whatsapp import (
+    CloudApiOutboundSender,
     InvalidWebhookSignature,
     MockOutboundSender,
     extract_text_messages,
@@ -32,7 +34,15 @@ app = FastAPI(
     version="0.3.0",
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
 )
-app.state.whatsapp_sender = MockOutboundSender()
+settings = get_settings()
+if settings.whatsapp_access_token and settings.whatsapp_phone_number_id:
+    app.state.whatsapp_sender = CloudApiOutboundSender(
+        access_token=settings.whatsapp_access_token,
+        phone_number_id=settings.whatsapp_phone_number_id,
+        graph_api_version=settings.whatsapp_graph_api_version,
+    )
+else:
+    app.state.whatsapp_sender = MockOutboundSender()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -76,7 +86,9 @@ async def receive_whatsapp_webhook(
         if command is not None:
             commands += 1
             duplicates += int(command.duplicate)
-            app.state.whatsapp_sender.send_text(message.sender, command.reply)
+            await run_in_threadpool(
+                app.state.whatsapp_sender.send_text, message.sender, command.reply
+            )
             continue
         try:
             result = service.process(
@@ -86,7 +98,8 @@ async def receive_whatsapp_webhook(
             )
         except ParseError:
             clarification_required += 1
-            app.state.whatsapp_sender.send_text(
+            await run_in_threadpool(
+                app.state.whatsapp_sender.send_text,
                 message.sender,
                 "Não entendi se isso é entrada, despesa ou retirada. "
                 "Envie uma operação por mensagem.",
@@ -94,7 +107,8 @@ async def receive_whatsapp_webhook(
             continue
         processed += 1
         duplicates += int(result.duplicate)
-        app.state.whatsapp_sender.send_text(
+        await run_in_threadpool(
+            app.state.whatsapp_sender.send_text,
             message.sender,
             format_confirmation(
                 result.transaction.transaction_type.value,

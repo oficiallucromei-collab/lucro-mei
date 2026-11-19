@@ -3,6 +3,12 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any, Protocol
 
+import httpx
+
+
+class WhatsAppSendError(RuntimeError):
+    """WhatsApp could not accept an outbound message."""
+
 
 class InvalidWebhookSignature(ValueError):
     pass
@@ -31,6 +37,35 @@ class MockOutboundSender:
 
     def send_text(self, recipient: str, text: str) -> None:
         self.sent_messages.append(SentMessage(recipient=recipient, text=text))
+
+
+@dataclass(slots=True)
+class CloudApiOutboundSender:
+    access_token: str = field(repr=False)
+    phone_number_id: str = field(repr=False)
+    graph_api_version: str = "v25.0"
+
+    def send_text(self, recipient: str, text: str) -> None:
+        url = f"https://graph.facebook.com/{self.graph_api_version}/{self.phone_number_id}/messages"
+        try:
+            response = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {self.access_token}"},
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": recipient,
+                    "type": "text",
+                    "text": {"body": text},
+                },
+                timeout=10.0,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise WhatsAppSendError(
+                f"WhatsApp rejected the outbound message (HTTP {exc.response.status_code})."
+            ) from None
+        except httpx.RequestError:
+            raise WhatsAppSendError("Could not reach the WhatsApp Cloud API.") from None
 
 
 def verify_signature(body: bytes, signature_header: str | None, app_secret: str) -> None:
