@@ -75,9 +75,7 @@ def extract_text_messages(payload: dict[str, Any]) -> list[WhatsAppTextMessage]:
     return normalized
 
 
-def format_confirmation(transaction_type: str, amount_cents: int, duplicate: bool) -> str:
+def format_confirmation(transaction_type: str, amount_cents: int) -> str:
     amount = format_brl(amount_cents)
-    if duplicate:
-        return f"Essa mensagem já foi registrada: {amount}."
     labels = {"income": "Entrada", "expense": "Despesa", "withdrawal": "Retirada pessoal"}
     return f"{labels[transaction_type]} registrada: {amount}. Responda 'desfazer' para corrigir."

@@ -287,6 +287,18 @@ def test_whatsapp_duplicate_delivery_does_not_duplicate_transaction() -> None:
     assert second.json()["duplicates"] == 1
     with TestingSession() as session:
         assert session.query(Transaction).count() == 1
+    sent = app.state.whatsapp_sender.sent_messages
+    assert len(sent) == 1
+    assert "Despesa registrada: R$ 80,00" in sent[0].text
+
+
+def test_whatsapp_duplicate_delivery_never_sends_already_registered_notice() -> None:
+    payload = whatsapp_payload("wamid.triple", "Recebi 150 por um corte")
+    for _ in range(3):
+        assert signed_webhook(payload).status_code == 200
+    texts = [message.text for message in app.state.whatsapp_sender.sent_messages]
+    assert texts == ["Entrada registrada: R$ 150,00. Responda 'desfazer' para corrigir."]
+    assert not any("já foi registrada" in text for text in texts)
 
 
 def test_whatsapp_ambiguous_message_requests_clarification() -> None:
@@ -313,6 +325,7 @@ def test_whatsapp_undo_is_idempotent_across_duplicate_deliveries() -> None:
         assert events[0].transaction_id == second["transaction_id"]
         assert events[0].transaction_id != first["transaction_id"]
         assert session.query(CommandReceipt).count() == 1
+    assert len(app.state.whatsapp_sender.sent_messages) == 1
 
 
 def test_whatsapp_correction_preserves_original_transaction() -> None:
@@ -388,8 +401,9 @@ def test_command_without_applicable_transaction_is_safely_replayed() -> None:
     signed_webhook(payload)
 
     sent = app.state.whatsapp_sender.sent_messages
-    assert sent[-2].text == "Não encontrei um lançamento ativo para desfazer."
-    assert sent[-1].text == sent[-2].text
+    assert [message.text for message in sent] == [
+        "Não encontrei um lançamento ativo para desfazer."
+    ]
     with TestingSession() as session:
         assert session.query(CommandReceipt).count() == 1
         assert session.query(TransactionEvent).count() == 0

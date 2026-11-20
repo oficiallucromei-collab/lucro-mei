@@ -116,7 +116,10 @@ async def receive_whatsapp_webhook(
         if command is not None:
             commands += 1
             duplicates += int(command.duplicate)
-            app.state.whatsapp_sender.send_text(message.sender, command.reply)
+            # Meta redelivers messages it thinks were not acknowledged. The user already got
+            # this reply the first time, so a redelivery must stay silent.
+            if not command.duplicate:
+                app.state.whatsapp_sender.send_text(message.sender, command.reply)
             continue
         try:
             result = service.process(
@@ -134,12 +137,13 @@ async def receive_whatsapp_webhook(
             continue
         processed += 1
         duplicates += int(result.duplicate)
+        if result.duplicate:
+            continue
         app.state.whatsapp_sender.send_text(
             message.sender,
             format_confirmation(
                 result.transaction.transaction_type.value,
                 result.transaction.amount_cents,
-                result.duplicate,
             ),
         )
     return {
