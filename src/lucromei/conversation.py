@@ -1,16 +1,16 @@
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from lucromei.domain import TransactionType
-from lucromei.models import Business, CommandReceipt
-from lucromei.service import LedgerService, normalize_whatsapp_number
+from lucromei.domain import PeriodTotals, TransactionType
+from lucromei.models import CommandReceipt
+from lucromei.money import InvalidAmount, format_brl, parse_brl_amount
+from lucromei.service import LedgerService
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +32,24 @@ _SUMMARY_COMMANDS = {
     "resumo deste mes",
     "resumo mensal",
 }
+_MONTH_NAMES = (
+    "janeiro",
+    "fevereiro",
+    "março",
+    "abril",
+    "maio",
+    "junho",
+    "julho",
+    "agosto",
+    "setembro",
+    "outubro",
+    "novembro",
+    "dezembro",
+)
+SUMMARY_DISCLAIMER = (
+    "Esses valores não consideram contas futuras, reservas ou impostos, então não são "
+    "automaticamente o quanto você pode tirar com segurança."
+)
 _TYPE_WORDS = {
     "entrada": TransactionType.INCOME,
     "despesa": TransactionType.EXPENSE,
@@ -67,12 +85,13 @@ class ConversationService:
                     reason="Desfeito por comando no WhatsApp",
                     commit=False,
                 )
-                reply = f"Lançamento de {_money(transaction.amount_cents)} desfeito."
+                reply = f"Lançamento de {format_brl(transaction.amount_cents)} desfeito."
         elif match := _CORRECTION_RE.fullmatch(normalized):
             command_type = "correction"
             transaction_type = _TYPE_WORDS.get(match.group(1))
-            amount_cents = _parse_amount(match.group(2))
-            if amount_cents is None:
+            try:
+                amount_cents = parse_brl_amount(match.group(2))
+            except InvalidAmount:
                 return None
             transaction = self.ledger.latest_transaction(whatsapp_number, transaction_type)
             if transaction is None:
@@ -84,21 +103,16 @@ class ConversationService:
                     reason="Corrigido por comando no WhatsApp",
                     commit=False,
                 )
-                reply = f"Lançamento corrigido para {_money(amount_cents)}."
+                reply = f"Lançamento corrigido para {format_brl(amount_cents)}."
         elif normalized.rstrip(" ?!") in _SUMMARY_COMMANDS:
             command_type = "summary"
-            current = now or datetime.now(UTC)
-            summary = self.ledger.monthly_summary(whatsapp_number, current.year, current.month)
-            reply = (
-                f"Resumo do mês: entradas {_money(summary.income_cents)}, "
-                f"despesas {_money(summary.expense_cents)}, retiradas "
-                f"{_money(summary.withdrawal_cents)}. Saldo: "
-                f"{_money(summary.operating_balance_cents)}."
-            )
+            year, month = self.ledger.current_month(now)
+            summary = self.ledger.monthly_summary(whatsapp_number, year, month)
+            reply = format_monthly_summary(year, month, summary.totals)
         else:
             return None
 
-        business = self._get_or_create_business(whatsapp_number)
+        business = self.ledger.get_or_create_business(whatsapp_number)
         receipt = CommandReceipt(
             external_id=message_id,
             business_id=business.id,
@@ -121,17 +135,6 @@ class ConversationService:
             select(CommandReceipt).where(CommandReceipt.external_id == message_id)
         )
 
-    def _get_or_create_business(self, whatsapp_number: str) -> Business:
-        canonical_number = normalize_whatsapp_number(whatsapp_number)
-        business = self.session.scalar(
-            select(Business).where(Business.whatsapp_number == canonical_number)
-        )
-        if business is None:
-            business = Business(whatsapp_number=canonical_number)
-            self.session.add(business)
-            self.session.flush()
-        return business
-
     @staticmethod
     def _result(receipt: CommandReceipt, *, duplicate: bool) -> CommandResult:
         return CommandResult(receipt.command_type, receipt.response_text, duplicate)
@@ -143,23 +146,16 @@ def _normalize(text: str) -> str:
     return " ".join(without_accents.split())
 
 
-def _parse_amount(raw: str) -> int | None:
-    cleaned = raw.strip()
-    if "," in cleaned:
-        cleaned = cleaned.replace(".", "").replace(",", ".")
-    elif cleaned.count(".") > 1:
-        cleaned = cleaned.replace(".", "")
-    try:
-        value = Decimal(cleaned)
-    except InvalidOperation:
-        return None
-    cents = int(value * 100)
-    return cents if cents > 0 else None
-
-
-def _money(cents: int) -> str:
-    sign = "-" if cents < 0 else ""
-    absolute = abs(cents)
-    reais, centavos = divmod(absolute, 100)
-    formatted_reais = f"{reais:,}".replace(",", ".")
-    return f"{sign}R$ {formatted_reais},{centavos:02d}"
+def format_monthly_summary(year: int, month: int, totals: PeriodTotals) -> str:
+    return "\n".join(
+        [
+            f"Resumo de {_MONTH_NAMES[month - 1]}/{year}:",
+            f"Entradas: {format_brl(totals.income_cents)}",
+            f"Despesas do negócio: {format_brl(totals.expense_cents)}",
+            f"Resultado do negócio: {format_brl(totals.operating_result_cents)}",
+            f"Retiradas pessoais: {format_brl(totals.withdrawal_cents)}",
+            f"Sobra após retiradas: {format_brl(totals.net_after_withdrawals_cents)}",
+            "",
+            SUMMARY_DISCLAIMER,
+        ]
+    )
