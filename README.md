@@ -113,3 +113,9 @@ any verification token previously recorded in logs or saved in a deployment draf
 2. Structured AI fallback for messages that deterministic rules cannot classify.
 3. Minimal onboarding and subscription portal.
 
+
+## Acquisition and founder operations
+
+The acquisition funnel runs in the existing FastAPI service. See the
+[growth runbook](GROWTH.md) for setup, event definitions, campaign imports, privacy
+requests, and costs. Growth is off by default.

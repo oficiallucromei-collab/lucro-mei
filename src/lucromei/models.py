@@ -74,3 +74,74 @@ class TransactionEvent(Base):
     reason: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     transaction: Mapped[Transaction] = relationship(back_populates="events")
+
+
+class Acquisition(Base):
+    __tablename__ = "acquisitions"
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id"), primary_key=True)
+    attribution: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    segment: Mapped[str | None] = mapped_column(String(32))
+    trial_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activation_count: Mapped[int] = mapped_column(Integer)
+    activation_hours: Mapped[int] = mapped_column(Integer)
+    last_inbound: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    opt_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    referral_code: Mapped[str | None] = mapped_column(String(32), unique=True)
+    stripe_customer: Mapped[str | None] = mapped_column(String(255), unique=True)
+    checkout_id: Mapped[str | None] = mapped_column(String(255))
+    subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    subscription_status: Mapped[str | None] = mapped_column(String(32))
+    paid_through: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recurring_cents: Mapped[int | None] = mapped_column(Integer)
+
+
+class AcquisitionClick(Base):
+    __tablename__ = "acquisition_clicks"
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    attribution: Mapped[dict[str, Any]] = mapped_column(JSON)
+    claimed: Mapped[bool] = mapped_column(default=False)
+
+
+class GrowthEvent(Base):
+    __tablename__ = "growth_events"
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id"), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), primary_key=True)
+    happened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    amount_cents: Mapped[int | None] = mapped_column(Integer)
+
+
+class CampaignDay(Base):
+    __tablename__ = "campaign_days"
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    campaign: Mapped[str] = mapped_column(String(80), primary_key=True)
+    spend_cents: Mapped[int] = mapped_column(Integer)
+    impressions: Mapped[int] = mapped_column(Integer)
+    clicks: Mapped[int] = mapped_column(Integer)
+
+
+class LandingDay(Base):
+    __tablename__ = "landing_days"
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    visits: Mapped[int] = mapped_column(Integer)
+
+
+class GrowthAudit(Base):
+    __tablename__ = "growth_audit"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    action: Mapped[str] = mapped_column(String(50))
+    happened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class TrialHold(Base):
+    __tablename__ = "trial_holds"
+    identity_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class GrowthRateBucket(Base):
+    __tablename__ = "growth_rate_buckets"
+    route: Mapped[str] = mapped_column(String(20), primary_key=True)
+    minute: Mapped[int] = mapped_column(Integer, primary_key=True)
+    count: Mapped[int] = mapped_column(Integer)

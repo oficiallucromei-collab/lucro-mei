@@ -3,6 +3,8 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY alembic.ini ./
+COPY migrations ./migrations
 RUN python -m pip install --no-cache-dir --upgrade "pip>=26.2,<27" \
     && python -m pip install --no-cache-dir .
 

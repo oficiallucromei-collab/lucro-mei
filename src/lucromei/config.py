@@ -1,6 +1,8 @@
 import os
 import re
+from datetime import date
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,6 +20,38 @@ class Settings(BaseSettings):
     whatsapp_access_token: str | None = Field(default=None, repr=False)
     whatsapp_phone_number_id: str | None = None
     whatsapp_graph_api_version: str = "v25.0"
+    growth_enabled: bool = False
+    growth_enforce_trial: bool = False
+    growth_public_requests_per_minute: int = Field(default=240, ge=1, le=100_000)
+    growth_whatsapp_number: str = Field(default="", pattern=r"^[0-9]{0,15}$")
+    growth_public_url: str = Field(default="", pattern=r"^(|https://[A-Za-z0-9.-]+(?::[0-9]+)?)$")
+    growth_privacy_url: str = Field(default="", pattern=r"^(|https://[^\s]+)$")
+    growth_terms_url: str = Field(default="", pattern=r"^(|https://[^\s]+)$")
+    growth_founder_token: str = Field(default="", min_length=0, repr=False)
+    growth_trial_hold_key: str = Field(default="", repr=False)
+    growth_trial_hold_days: int = Field(default=180, ge=1, le=365)
+    growth_trial_days: int = Field(default=14, ge=1, le=365)
+    growth_activation_count: int = Field(default=3, ge=1, le=100)
+    growth_activation_hours: int = Field(default=48, ge=1, le=8760)
+    growth_price_cents: int = Field(default=2490, ge=1, le=50_000_000)
+    growth_budget_cents: int = Field(default=15000, gt=0)
+    growth_budget_alert_percent: int = Field(default=80, ge=1, le=100)
+    growth_experiment_start: date | None = None
+    growth_campaign_days: int = Field(default=10, gt=0)
+    growth_target_activated: int = Field(default=5, gt=0)
+    growth_target_paid: int = Field(default=2, gt=0)
+    growth_variable_cost_cents: int | None = Field(default=None, ge=0)
+    growth_referrals_enabled: bool = False
+    growth_referral_reward_days: int = Field(default=7, ge=1, le=30)
+    growth_report_language: Literal["pt", "en"] = "pt"
+    growth_ai_key: str = Field(default="", repr=False)
+    growth_ai_model: str = ""
+    growth_lifecycle_enabled: bool = False
+    growth_lifecycle_templates: dict[str, str] = Field(default_factory=dict)
+    growth_stripe_key: str = Field(default="", repr=False)
+    growth_stripe_price: str = ""
+    growth_stripe_webhook_secret: str = Field(default="", repr=False)
+    growth_stripe_live: bool = False
 
 
 def on_cloud_run() -> bool:

@@ -20,6 +20,8 @@ class WhatsAppTextMessage:
     message_id: str
     sender: str
     text: str
+    referral_source: str | None = None
+    timestamp: int | None = None
 
 
 class OutboundSender(Protocol):
@@ -47,6 +49,18 @@ class CloudApiOutboundSender:
     graph_api_version: str = "v25.0"
 
     def send_text(self, recipient: str, text: str) -> None:
+        self._send(recipient, {"type": "text", "text": {"body": text}})
+
+    def send_template(self, recipient: str, template: str) -> None:
+        self._send(
+            recipient,
+            {
+                "type": "template",
+                "template": {"name": template, "language": {"code": "pt_BR"}},
+            },
+        )
+
+    def _send(self, recipient: str, content: dict) -> None:
         url = f"https://graph.facebook.com/{self.graph_api_version}/{self.phone_number_id}/messages"
         try:
             response = httpx.post(
@@ -55,8 +69,7 @@ class CloudApiOutboundSender:
                 json={
                     "messaging_product": "whatsapp",
                     "to": recipient,
-                    "type": "text",
-                    "text": {"body": text},
+                    **content,
                 },
                 timeout=10.0,
             )
@@ -120,7 +133,19 @@ def extract_text_messages(
                     and isinstance(sender, str)
                     and re.fullmatch(r"[+]?[0-9]{1,32}", sender)
                 ):
-                    normalized.append(WhatsAppTextMessage(message_id, sender, text))
+                    referral = message.get("referral")
+                    source = referral.get("source_id") if isinstance(referral, dict) else None
+                    if not isinstance(source, str) or not re.fullmatch(r"[0-9]{1,32}", source):
+                        source = None
+                    timestamp = message.get("timestamp")
+                    timestamp = (
+                        int(timestamp)
+                        if isinstance(timestamp, str) and re.fullmatch(r"[0-9]{1,11}", timestamp)
+                        else None
+                    )
+                    normalized.append(
+                        WhatsAppTextMessage(message_id, sender, text, source, timestamp)
+                    )
     return normalized
 
 

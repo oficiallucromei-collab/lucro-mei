@@ -8,7 +8,9 @@ from lucromei.config import get_settings
 
 def build_engine(database_url: str):
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+    return create_engine(
+        database_url, connect_args=connect_args, pool_pre_ping=True, hide_parameters=True
+    )
 
 
 engine = build_engine(get_settings().database_url)

@@ -84,7 +84,14 @@ class LedgerService:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def process(self, *, message_id: str, whatsapp_number: str, text: str) -> ProcessedMessage:
+    def process(
+        self,
+        *,
+        message_id: str,
+        whatsapp_number: str,
+        text: str,
+        commit: bool = True,
+    ) -> ProcessedMessage:
         if existing := self._find_message(message_id):
             return self._processed(existing, whatsapp_number, duplicate=True)
         parsed = parse_transaction(text)
@@ -112,8 +119,13 @@ class LedgerService:
         transaction.events.append(TransactionEvent(event_type="created", changes=_snapshot(parsed)))
         self.session.add(transaction)
         try:
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
         except IntegrityError:
+            if not commit:
+                raise
             self.session.rollback()
             existing = self._find_message(message_id)
             if existing is None:

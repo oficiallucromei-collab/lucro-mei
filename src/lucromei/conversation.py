@@ -51,6 +51,7 @@ class ConversationService:
         whatsapp_number: str,
         text: str,
         now: datetime | None = None,
+        commit: bool = True,
     ) -> CommandResult | None:
         if receipt := self._find_receipt(message_id):
             return self._duplicate_result(receipt, whatsapp_number)
@@ -107,8 +108,13 @@ class ConversationService:
         )
         self.session.add(receipt)
         try:
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
         except IntegrityError:
+            if not commit:
+                raise
             self.session.rollback()
             existing = self._find_receipt(message_id)
             if existing is None:

@@ -1,6 +1,7 @@
 import hmac
 import json
 import re
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import (
@@ -14,6 +15,7 @@ from fastapi import (
     Response,
     status,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -21,6 +23,8 @@ from lucromei.config import get_settings, on_cloud_run
 from lucromei.conversation import ConversationService
 from lucromei.db import get_session
 from lucromei.domain import ParseError
+from lucromei.growth import claim_reply, handle_growth_message
+from lucromei.growth_api import router as growth_router
 from lucromei.schemas import (
     CorrectionRequest,
     HealthResponse,
@@ -113,6 +117,23 @@ async def receive_whatsapp_webhook(
     processed = commands = duplicates = clarification_required = 0
     service = LedgerService(session)
     for message in messages:
+        growth_settings = get_settings()
+        if growth_settings.growth_enabled:
+            try:
+                duplicate = await run_in_threadpool(
+                    process_growth_reply,
+                    session,
+                    growth_settings,
+                    message,
+                    app.state.whatsapp_sender,
+                )
+            except MessageOwnerMismatch:
+                continue
+            except IntegrityError:
+                raise HTTPException(status_code=503, detail="Retry message.") from None
+            commands += 1
+            duplicates += int(duplicate)
+            continue
         try:
             command = ConversationService(session).handle(
                 message_id=message.message_id,
@@ -164,6 +185,23 @@ async def receive_whatsapp_webhook(
         "clarification_required": clarification_required,
         "ignored": max(0, len(messages) - processed - commands - clarification_required),
     }
+
+
+def process_growth_reply(session, settings, message, sender):
+    try:
+        reply, duplicate = handle_growth_message(session, settings, message)
+        session.commit()
+        now = datetime.now(UTC)
+        within_window = (
+            message.timestamp is not None and -300 <= now.timestamp() - message.timestamp < 86400
+        ) or (message.timestamp is None and settings.environment == "local")
+        if reply and within_window and claim_reply(session, message, now):
+            sender.send_text(message.sender, reply)
+        session.commit()
+        return duplicate
+    except Exception:
+        session.rollback()
+        raise
 
 
 def require_local_ledger_api() -> None:
@@ -277,3 +315,5 @@ def _state_response(transaction) -> TransactionStateResponse:
 
 
 app.include_router(ledger_api)
+
+app.include_router(growth_router)
