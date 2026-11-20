@@ -1,7 +1,10 @@
 import hmac
 import json
+import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from hashlib import sha256
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -20,11 +23,16 @@ from lucromei.models import (
 )
 from lucromei.whatsapp import MockOutboundSender
 
-engine = create_engine(
-    "sqlite://",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+# CI sets LUCROMEI_TEST_DATABASE_URL to a real PostgreSQL; locally an in-memory SQLite is used.
+TEST_DATABASE_URL = os.environ.get("LUCROMEI_TEST_DATABASE_URL")
+if TEST_DATABASE_URL:
+    engine = create_engine(TEST_DATABASE_URL)
+else:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
 TestingSession = sessionmaker(bind=engine, expire_on_commit=False)
 
 
@@ -34,7 +42,14 @@ def override_session() -> Iterator[Session]:
 
 
 app.dependency_overrides[get_session] = override_session
-client = TestClient(app)
+INTERNAL_API_KEY = "test-internal-key"
+client = TestClient(app, headers={"X-Internal-Api-Key": INTERNAL_API_KEY})
+SAO_PAULO = ZoneInfo("America/Sao_Paulo")
+
+
+def current_month_params() -> dict:
+    now = datetime.now(SAO_PAULO)
+    return {"whatsapp_number": "+5511999999999", "year": now.year, "month": now.month}
 
 
 def setup_function() -> None:
@@ -42,6 +57,8 @@ def setup_function() -> None:
     Base.metadata.create_all(engine)
     get_settings().whatsapp_verify_token = "verify-test-token"
     get_settings().whatsapp_app_secret = "test-app-secret"
+    get_settings().internal_api_key = INTERNAL_API_KEY
+    get_settings().business_timezone = "America/Sao_Paulo"
     app.state.whatsapp_sender = MockOutboundSender()
 
 
@@ -106,9 +123,9 @@ def test_correction_appends_event_without_overwriting_original() -> None:
 def test_reversal_excludes_transaction_from_summary() -> None:
     income = create_transaction("wamid.income", "Recebi 500 por cortes")
     create_transaction("wamid.expense", "Gastei 125 em produtos")
-    params = {"whatsapp_number": "+5511999999999", "year": 2026, "month": 11}
+    params = current_month_params()
     before = client.get("/v1/summaries/monthly", params=params)
-    assert before.json()["operating_balance_cents"] == 37500
+    assert before.json()["operating_result_cents"] == 37500
     reversed_response = client.post(
         f"/v1/transactions/{income['transaction_id']}/reversal",
         json={"reason": "Lançamento duplicado"},
@@ -117,23 +134,58 @@ def test_reversal_excludes_transaction_from_summary() -> None:
     after = client.get("/v1/summaries/monthly", params=params).json()
     assert after["income_cents"] == 0
     assert after["expense_cents"] == 12500
-    assert after["operating_balance_cents"] == -12500
+    assert after["operating_result_cents"] == -12500
 
 
 def test_summary_separates_personal_withdrawals() -> None:
     create_transaction("wamid.income", "Recebi 500 por cortes")
     create_transaction("wamid.expense", "Gastei 125 em produtos")
     create_transaction("wamid.withdrawal", "Retirei 100 para mim")
-    response = client.get(
-        "/v1/summaries/monthly",
-        params={"whatsapp_number": "+5511999999999", "year": 2026, "month": 11},
-    )
+    response = client.get("/v1/summaries/monthly", params=current_month_params())
     body = response.json()
     assert body["income_cents"] == 50000
     assert body["expense_cents"] == 12500
     assert body["withdrawal_cents"] == 10000
-    assert body["operating_balance_cents"] == 27500
-    assert "não representa automaticamente" in body["disclaimer"]
+    assert body["operating_result_cents"] == 37500
+    assert body["net_after_withdrawals_cents"] == 27500
+    assert "não representam" in body["disclaimer"]
+
+
+def test_month_boundaries_follow_sao_paulo_time() -> None:
+    created = create_transaction("wamid.late-night", "Recebi 150 por um corte")
+    # 01:30 UTC on 1 December is 22:30 on 30 November in São Paulo.
+    late_night = datetime(2026, 12, 1, 1, 30, tzinfo=UTC)
+    client.post(
+        f"/v1/transactions/{created['transaction_id']}/corrections",
+        json={"occurred_at": late_night.isoformat(), "reason": "Data do atendimento"},
+    )
+    params = {"whatsapp_number": "+5511999999999", "year": 2026}
+
+    november = client.get("/v1/summaries/monthly", params={**params, "month": 11}).json()
+    december = client.get("/v1/summaries/monthly", params={**params, "month": 12}).json()
+
+    assert november["income_cents"] == 15000
+    assert december["income_cents"] == 0
+    assert november["period_start"].startswith("2026-11-01T00:00:00-03:00")
+
+
+def test_internal_api_is_disabled_without_configured_key() -> None:
+    get_settings().internal_api_key = ""
+    response = client.get("/v1/summaries/monthly", params=current_month_params())
+    assert response.status_code == 404
+
+
+def test_internal_api_rejects_missing_or_wrong_key() -> None:
+    anonymous = TestClient(app)
+    wrong_key = TestClient(app, headers={"X-Internal-Api-Key": "wrong"})
+    assert anonymous.get("/v1/summaries/monthly", params=current_month_params()).status_code == 401
+    response = wrong_key.post(
+        "/v1/messages",
+        json={"message_id": "wamid.x", "whatsapp_number": "+5511999999999", "text": "Recebi 10"},
+    )
+    assert response.status_code == 401
+    with TestingSession() as session:
+        assert session.query(InboundMessage).count() == 0
 
 
 def whatsapp_payload(message_id: str, text: str, sender: str = "5511999999999") -> dict:
@@ -188,6 +240,19 @@ def test_whatsapp_webhook_verification() -> None:
     )
     assert response.status_code == 200
     assert response.text == "challenge-123"
+
+
+def test_whatsapp_webhook_verification_rejects_placeholder_token() -> None:
+    get_settings().whatsapp_verify_token = "change-me"
+    response = client.get(
+        "/webhooks/whatsapp",
+        params={
+            "hub.mode": "subscribe",
+            "hub.verify_token": "change-me",
+            "hub.challenge": "challenge-123",
+        },
+    )
+    assert response.status_code == 403
 
 
 def test_whatsapp_webhook_rejects_invalid_signature_without_writing() -> None:
@@ -287,10 +352,33 @@ def test_whatsapp_monthly_summary_reply_uses_effective_ledger() -> None:
 
     assert response.json()["commands"] == 1
     reply = app.state.whatsapp_sender.sent_messages[-1].text
-    assert "entradas R$ 500,00" in reply
-    assert "despesas R$ 125,00" in reply
-    assert "retiradas R$ 100,00" in reply
-    assert "Saldo: R$ 275,00" in reply
+    assert "Entradas: R$ 500,00" in reply
+    assert "Despesas do negócio: R$ 125,00" in reply
+    assert "Resultado do negócio: R$ 375,00" in reply
+    assert "Retiradas pessoais: R$ 100,00" in reply
+    assert "Sobra após retiradas: R$ 275,00" in reply
+    assert "não são automaticamente" in reply
+
+
+def test_whatsapp_decimal_dot_amount_is_not_multiplied() -> None:
+    signed_webhook(whatsapp_payload("wamid.coffee", "Gastei 12.50 em café"))
+    with TestingSession() as session:
+        assert session.query(Transaction).one().amount_cents == 1250
+
+
+def test_whatsapp_quantity_and_total_records_total() -> None:
+    signed_webhook(whatsapp_payload("wamid.cuts", "Fiz 3 cortes por 90 reais"))
+    with TestingSession() as session:
+        assert session.query(Transaction).one().amount_cents == 9000
+
+
+def test_correction_with_thousands_separator() -> None:
+    create_transaction("wamid.big", "Recebi 150 por um serviço")
+    signed_webhook(whatsapp_payload("wamid.fix-big", "corrigir para 1.500"))
+    assert "R$ 1.500,00" in app.state.whatsapp_sender.sent_messages[-1].text
+    with TestingSession() as session:
+        corrected = session.query(TransactionEvent).filter_by(event_type="corrected").one()
+        assert corrected.changes["amount_cents"] == 150000
 
 
 def test_command_without_applicable_transaction_is_safely_replayed() -> None:
