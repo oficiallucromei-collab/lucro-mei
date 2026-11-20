@@ -3,6 +3,9 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any, Protocol
 
+from lucromei.config import is_configured_secret
+from lucromei.money import format_brl
+
 
 class InvalidWebhookSignature(ValueError):
     pass
@@ -38,7 +41,7 @@ def verify_signature(body: bytes, signature_header: str | None, app_secret: str)
 
     if not signature_header or not signature_header.startswith("sha256="):
         raise InvalidWebhookSignature("Assinatura do webhook ausente ou inválida.")
-    if not app_secret or app_secret == "change-me":
+    if not is_configured_secret(app_secret):
         raise InvalidWebhookSignature("O segredo do aplicativo não está configurado.")
     expected = "sha256=" + hmac.new(app_secret.encode(), body, sha256).hexdigest()
     if not hmac.compare_digest(signature_header, expected):
@@ -73,7 +76,7 @@ def extract_text_messages(payload: dict[str, Any]) -> list[WhatsAppTextMessage]:
 
 
 def format_confirmation(transaction_type: str, amount_cents: int, duplicate: bool) -> str:
-    amount = f"R$ {amount_cents / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    amount = format_brl(amount_cents)
     if duplicate:
         return f"Essa mensagem já foi registrada: {amount}."
     labels = {"income": "Entrada", "expense": "Despesa", "withdrawal": "Retirada pessoal"}
