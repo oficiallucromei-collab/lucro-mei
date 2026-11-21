@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from lucromei.ai import MessageInterpreter, build_interpreter
 from lucromei.config import Settings, get_settings
 from lucromei.jobs import JobContext, JobQueue, utc_now
+from lucromei.observability import configure_logging, init_sentry
 from lucromei.processing import DEAD_HOOKS, HANDLERS
 from lucromei.whatsapp import OutboundSender
 
@@ -103,8 +104,14 @@ def main() -> None:  # pragma: no cover - process entry point
     parser = argparse.ArgumentParser(description="Process LucroMEI background jobs.")
     parser.add_argument("--once", action="store_true", help="drain due jobs and exit")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
-    worker = Worker(SessionLocal, build_sender(get_settings()))
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    init_sentry(
+        settings.sentry_dsn,
+        environment=settings.environment,
+        traces_sample_rate=settings.sentry_traces_sample_rate,
+    )
+    worker = Worker(SessionLocal, build_sender(settings))
     if args.once:
         worker.drain()
     else:

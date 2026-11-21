@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # Prices in millionths of a US dollar per million tokens (claude-haiku-5-5: $0.10 / $0.50).
     ai_input_price_micro_usd_per_mtok: int = 100_000
     ai_output_price_micro_usd_per_mtok: int = 500_000
+    # Observability. Logs are JSON with a correlation ID and never contain message text or
+    # amounts. Sentry is enabled only when a DSN is set.
+    log_level: str = "INFO"
+    sentry_dsn: str = Field(default="", repr=False)
+    sentry_traces_sample_rate: float = 0.0
     # Background worker that processes received messages and sends replies. "embedded" runs it
     # inside the web process; "off" leaves it to `python -m lucromei.worker`.
     worker_mode: str = "embedded"

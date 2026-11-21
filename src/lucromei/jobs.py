@@ -10,6 +10,7 @@ A handler's database writes and the job's completion are committed in the same t
 """
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session, sessionmaker
 
 from lucromei.models import Job, new_id
+from lucromei.observability import correlation_id
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,7 @@ class ClaimedJob:
     kind: str
     payload: dict[str, Any]
     attempts: int
+    correlation_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -120,6 +123,7 @@ def enqueue(
             "attempts": 0,
             "max_attempts": max_attempts,
             "run_after": run_after or now,
+            "correlation_id": correlation_id.get(),
             "created_at": now,
             "updated_at": now,
         },
@@ -167,14 +171,26 @@ class JobQueue:
                 job.status = RUNNING
                 job.attempts += 1
                 job.locked_until = now + self.lease
-                claimed.append(ClaimedJob(job.id, job.kind, dict(job.payload), job.attempts))
+                claimed.append(
+                    ClaimedJob(
+                        job.id, job.kind, dict(job.payload), job.attempts, job.correlation_id
+                    )
+                )
             session.commit()
             return claimed
 
     def run(self, claimed: ClaimedJob, context: JobContext) -> str:
         """Run one claimed job. Returns its new status."""
 
+        token = correlation_id.set(claimed.correlation_id)
+        try:
+            return self._run(claimed, context)
+        finally:
+            correlation_id.reset(token)
+
+    def _run(self, claimed: ClaimedJob, context: JobContext) -> str:
         handler = self.handlers.get(claimed.kind)
+        started = time.monotonic()
         with self.session_factory() as session:
             try:
                 if handler is None:
@@ -188,6 +204,15 @@ class JobQueue:
                 job.locked_until = None
                 job.finished_at = context.now
                 session.commit()
+                logger.info(
+                    "job_done",
+                    extra={
+                        "job_id": claimed.id,
+                        "job_kind": claimed.kind,
+                        "attempts": claimed.attempts,
+                        "duration_ms": int((time.monotonic() - started) * 1000),
+                    },
+                )
                 return DONE
             except Exception as exc:  # noqa: BLE001 - a job failure must never stop the worker
                 session.rollback()

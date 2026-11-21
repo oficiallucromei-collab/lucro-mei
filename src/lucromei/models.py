@@ -172,6 +172,8 @@ class Job(Base):
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Error class and code only: never message text or amounts.
     last_error: Mapped[str | None] = mapped_column(String(500))
+    # Correlation ID of the request that created the job, restored while the job runs.
+    correlation_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
