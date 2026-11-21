@@ -162,8 +162,9 @@ resource "google_cloud_run_v2_service" "test" {
   deletion_protection  = true
 
   lifecycle {
-    # Set by whichever client (console, gcloud) last touched the service.
-    ignore_changes = [client, client_version]
+    # client fields: set by whichever client (console, gcloud) last touched the service.
+    # image: releases move it from cloudbuild.yaml; var.image only seeds a new service.
+    ignore_changes = [client, client_version, template[0].containers[0].image]
   }
 
   scaling {

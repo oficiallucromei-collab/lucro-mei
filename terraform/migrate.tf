@@ -1,17 +1,6 @@
 # Runs `alembic upgrade head` from the release image against the service's database, with the
-# runtime identity. A release first points this job at the new image (var.migration_image),
-# executes it, and only then moves the service to that image (var.image). See README.
-
-variable "migration_image" {
-  description = "Image the migration job runs. Empty means the service image (var.image)."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.migration_image == "" || can(regex("^southamerica-east1-docker[.]pkg[.]dev/lucro-mei/lucromei/lucromei@sha256:[a-f0-9]{64}$", var.migration_image))
-    error_message = "Use a SHA-256 image digest from the LucroMEI Artifact Registry repository."
-  }
-}
+# runtime identity. cloudbuild.yaml points this job at the new image and executes it before it
+# moves the service to that image. See README.
 
 resource "google_cloud_run_v2_job" "migrate" {
   name                = "lucromei-migrate"
@@ -19,7 +8,8 @@ resource "google_cloud_run_v2_job" "migrate" {
   deletion_protection = false
 
   lifecycle {
-    ignore_changes = [client, client_version]
+    # image: releases move it from cloudbuild.yaml; var.image only seeds a new job.
+    ignore_changes = [client, client_version, template[0].template[0].containers[0].image]
   }
 
   template {
@@ -31,7 +21,7 @@ resource "google_cloud_run_v2_job" "migrate" {
       timeout         = "300s"
 
       containers {
-        image   = coalesce(var.migration_image, var.image)
+        image   = var.image
         command = ["alembic"]
         args    = ["upgrade", "head"]
 

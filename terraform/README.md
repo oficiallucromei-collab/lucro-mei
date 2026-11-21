@@ -8,7 +8,8 @@ This configuration manages project `lucro-mei` in `southamerica-east1`. It cover
 - the Secret Manager entries and their runtime grants;
 - the public `lucromei-test` Cloud Run service;
 - the `lucromei-migrate` Cloud Run job;
-- the private bucket that stages release source.
+- the private bucket that stages release source;
+- the deploy grants for `lucromei-build` and the push-to-main release trigger.
 
 The test service runs with the app's production safeguards. It connects to the
 isolated Neon test database through `lucromei-test-database-url`. The
@@ -41,24 +42,75 @@ services, secrets and repository have `prevent_destroy` or deletion protection.
 
 ### Grants the project owner applies
 
-These need project IAM admin rights, so they are kept out of Terraform:
+These need IAM admin rights the usual Terraform account lacks, so they are kept out
+of Terraform:
 
 ```sh
 # Lets Cloud Build write logs as lucromei-build (needed by cloudbuild.yaml).
 gcloud projects add-iam-policy-binding lucro-mei \
   --member=serviceAccount:lucromei-build@lucro-mei.iam.gserviceaccount.com \
   --role=roles/logging.logWriter
+
+# Lets lucromei-build deploy the service and job, which run as lucromei-runtime.
+gcloud iam service-accounts add-iam-policy-binding \
+  lucromei-runtime@lucro-mei.iam.gserviceaccount.com --project=lucro-mei \
+  --member=serviceAccount:lucromei-build@lucro-mei.iam.gserviceaccount.com \
+  --role=roles/iam.serviceAccountUser
+
+# Lets the Cloud Build service agent store the GitHub connection's token
+# (needed once, to create the lucromei-github connection).
+gcloud projects add-iam-policy-binding lucro-mei \
+  --member=serviceAccount:service-312975377897@gcp-sa-cloudbuild.iam.gserviceaccount.com \
+  --role=roles/secretmanager.admin
 ```
 
-## Build a release
+## Release pipeline
 
-Cloud Build runs as `lucromei-build`. It runs lint and tests, builds the linux/amd64
-image, and runs `scripts/smoke-image.sh` against the image with production settings
-and dummy credentials. It pushes the commit-tagged image only after the smoke test
-passes. The build never deploys.
+`cloudbuild.yaml` runs as `lucromei-build`. Each step runs only if the previous one passed:
+
+1. lint and tests;
+2. build the linux/amd64 image;
+3. run `scripts/smoke-image.sh` against it, with production settings and dummy credentials;
+4. push the commit-tagged image and resolve its digest;
+5. point `lucromei-migrate` at the digest and run it (`alembic upgrade head`);
+6. move `lucromei-test` to the digest and check `/health`.
+
+Migrations run while the previous revision still serves, so they must stay additive
+(new tables and columns). If the new revision fails to start, Cloud Run keeps traffic
+on the previous one and the build fails.
+
+The pipeline owns the image of the service and the job. Terraform ignores their
+`image`, and `var.image` only seeds them if they are ever recreated. Other settings
+(env, secrets, scaling) still go through Terraform.
+
+### Push-to-main trigger
+
+The `lucromei-release` trigger runs the pipeline on every push to `main`. It needs a
+Cloud Build connection to GitHub, which is set up once by hand:
+
+1. The project owner applies the `secretmanager.admin` grant above.
+2. Create the connection. Open the link it prints, authorize, and install the Google
+   Cloud Build GitHub App on `oficiallucromei-collab/lucro-mei`:
+
+   ```bash
+   gcloud builds connections create github lucromei-github \
+     --project=lucro-mei --region=southamerica-east1
+   ```
+
+3. Check that `installationState.stage` is `COMPLETE`:
+
+   ```bash
+   gcloud builds connections describe lucromei-github \
+     --project=lucro-mei --region=southamerica-east1
+   ```
+
+4. Set `release_trigger_enabled` to `true` in `trigger.tf`, then plan and apply.
+
+### Run the pipeline by hand
 
 From the repository root, on the reviewed commit, run in Bash. `git archive` uploads
-only committed files, so local changes and untracked credentials stay out:
+only committed files, so local changes and untracked credentials stay out. This
+deploys too; add `,_DEPLOY=false` to the substitutions to only publish the image:
 
 ```bash
 set -euo pipefail
@@ -84,34 +136,18 @@ image="southamerica-east1-docker.pkg.dev/lucro-mei/lucromei/lucromei@$digest"
 printf '%s\n' "$image"
 ```
 
-## Promote a release
+## Roll back
 
-Migrations run before the service moves to the new image. They must stay additive
-(new tables and columns), so the revision still serving keeps working while they run.
+Move the service back to the previous digest (the build log and the service's
+revisions list it). First check that the old code works with the current schema.
+Migrations are not rolled back automatically.
 
-1. Point the migration job at the new image and run it:
+```bash
+gcloud run services update lucromei-test --project=lucro-mei \
+  --region=southamerica-east1 --image="southamerica-east1-docker.pkg.dev/lucro-mei/lucromei/lucromei@sha256:..."
+```
 
-   ```bash
-   terraform -chdir=terraform plan -var="migration_image=$image" -out=migrate.tfplan
-   terraform -chdir=terraform apply migrate.tfplan     # changes only lucromei-migrate
-   gcloud run jobs execute lucromei-migrate --project=lucro-mei \
-     --region=southamerica-east1 --wait
-   ```
-
-2. Move the service to the image. Review that the plan only changes the image:
-
-   ```bash
-   terraform -chdir=terraform plan -var="image=$image" -out=release.tfplan
-   terraform -chdir=terraform apply release.tfplan
-   curl -fsS https://lucromei-test-312975377897.southamerica-east1.run.app/health
-   ```
-
-3. Record the promoted digest as the `image` default in `variables.tf` and commit it,
-   so later plans keep the release. Note the previous digest in the commit message.
-
-To roll back, plan and apply the previous digest with `-var="image=..."`. First check
-that the old code works with the current schema. Migrations are not rolled back
-automatically.
+The next push to `main` deploys again, so revert or fix the bad commit too.
 
 The service runs with `cpu_idle = false`, so the embedded job worker keeps its CPU
 between requests. Releases of the current code also need `LUCROMEI_TERMS_URL`

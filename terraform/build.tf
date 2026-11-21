@@ -43,6 +43,25 @@ resource "google_storage_bucket_iam_member" "build_source_reader" {
   member = "serviceAccount:${google_service_account.build.email}"
 }
 
+# Deploy rights for cloudbuild.yaml, scoped to the one service and job it releases.
+resource "google_cloud_run_v2_service_iam_member" "build_deployer" {
+  name     = google_cloud_run_v2_service.test.name
+  location = google_cloud_run_v2_service.test.location
+  role     = "roles/run.developer"
+  member   = "serviceAccount:${google_service_account.build.email}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "build_migrator" {
+  name     = google_cloud_run_v2_job.migrate.name
+  location = google_cloud_run_v2_job.migrate.location
+  role     = "roles/run.developer"
+  member   = "serviceAccount:${google_service_account.build.email}"
+}
+
+# Updating the service and job keeps them running as lucromei-runtime, so lucromei-build also
+# needs roles/iam.serviceAccountUser on it. Setting that needs iam.serviceAccounts.setIamPolicy,
+# so the project owner applies it outside Terraform; see README.
+
 output "build_source_bucket" {
   description = "Private staging bucket for reviewed release source archives."
   value       = google_storage_bucket.build_source.url
