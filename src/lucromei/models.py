@@ -34,6 +34,31 @@ class Business(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     whatsapp_number: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    display_name: Mapped[str | None] = mapped_column(String(60))
+    business_type: Mapped[str | None] = mapped_column(String(80))
+    # new -> awaiting_name -> awaiting_business_type -> awaiting_terms -> active.
+    # Nothing is written to the ledger before "active", which requires accepting the terms.
+    onboarding_step: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="new", server_default="new"
+    )
+    trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TermsAcceptance(Base):
+    """Proof that a business accepted a given version of the terms. Append-only."""
+
+    __tablename__ = "terms_acceptances"
+    __table_args__ = (
+        UniqueConstraint("business_id", "terms_version", name="uq_terms_acceptances_version"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    terms_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # The WhatsApp message in which the user answered, and what they wrote.
+    source_message_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    accepted_text: Mapped[str] = mapped_column(String(100), nullable=False)
 
 
 class CommandReceipt(Base):

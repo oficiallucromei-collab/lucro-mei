@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ""
     whatsapp_graph_api_version: str = "v25.0"
     whatsapp_timeout_seconds: float = 10.0
+    # Terms of use shown during onboarding. Bump the version whenever the text changes.
+    terms_version: str = "2026-11-20"
+    terms_url: str = ""
+    trial_days: int = 14
     # Background worker that processes received messages and sends replies. "embedded" runs it
     # inside the web process; "off" leaves it to `python -m lucromei.worker`.
     worker_mode: str = "embedded"
@@ -46,3 +50,19 @@ def get_settings() -> Settings:
 
 def get_business_timezone() -> ZoneInfo:
     return ZoneInfo(get_settings().business_timezone)
+
+
+def check_production_settings(settings: Settings) -> None:
+    """Refuse to start in production with settings that would break or mislead users."""
+
+    if settings.environment.strip().lower() != "production":
+        return
+    missing = []
+    if not is_configured_secret(settings.whatsapp_app_secret):
+        missing.append("LUCROMEI_WHATSAPP_APP_SECRET")
+    if not is_configured_secret(settings.whatsapp_verify_token):
+        missing.append("LUCROMEI_WHATSAPP_VERIFY_TOKEN")
+    if not settings.terms_url.startswith("https://"):
+        missing.append("LUCROMEI_TERMS_URL (https)")
+    if missing:
+        raise RuntimeError("Configuração de produção incompleta: " + ", ".join(missing))

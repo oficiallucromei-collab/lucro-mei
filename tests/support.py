@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 import pytest
@@ -15,7 +16,8 @@ from sqlalchemy.pool import StaticPool
 from lucromei.config import get_settings
 from lucromei.db import get_session
 from lucromei.main import app
-from lucromei.models import Base
+from lucromei.models import Base, Business, TermsAcceptance
+from lucromei.service import normalize_whatsapp_number
 from lucromei.whatsapp import MockOutboundSender
 from lucromei.worker import Worker
 
@@ -57,8 +59,38 @@ def reset_state() -> None:
     settings.business_timezone = "America/Sao_Paulo"
     settings.worker_mode = "off"
     settings.job_max_attempts = 8
+    settings.terms_version = "2026-11-20"
+    settings.terms_url = "https://lucromei.example/termos"
+    settings.trial_days = 14
     app.state.whatsapp_sender = MockOutboundSender()
     app.state.worker = None
+
+
+def onboard(number: str = DEFAULT_SENDER, *, name: str = "Ana") -> str:
+    """Create a business that already finished onboarding. Returns its ID."""
+    now = datetime.now(UTC)
+    with TestingSession() as session:
+        business = Business(
+            whatsapp_number=normalize_whatsapp_number(number),
+            display_name=name,
+            business_type="barbearia",
+            onboarding_step="active",
+            trial_started_at=now,
+            trial_ends_at=now + timedelta(days=14),
+        )
+        session.add(business)
+        session.flush()
+        session.add(
+            TermsAcceptance(
+                business_id=business.id,
+                terms_version="2026-11-20",
+                accepted_at=now,
+                source_message_id=f"onboarding-{business.id}",
+                accepted_text="aceito",
+            )
+        )
+        session.commit()
+        return business.id
 
 
 def worker(sender=None) -> Worker:

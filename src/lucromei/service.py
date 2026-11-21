@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from lucromei import onboarding
 from lucromei.config import get_business_timezone
 from lucromei.domain import (
     ParsedTransaction,
@@ -105,8 +106,13 @@ class LedgerService:
         """
         if existing := self._find_message(message_id):
             return self._processed(existing, whatsapp_number, duplicate=True)
+        business = self.find_business(whatsapp_number)
+        if not onboarding.is_active(business):
+            raise onboarding.OnboardingRequired(
+                "O cadastro e o aceite dos termos precisam ser concluídos antes do primeiro "
+                "lançamento."
+            )
         parsed = parse_transaction(text, now=occurred_at)
-        business = self.get_or_create_business(whatsapp_number)
         inbound = InboundMessage(
             external_id=message_id,
             business_id=business.id,

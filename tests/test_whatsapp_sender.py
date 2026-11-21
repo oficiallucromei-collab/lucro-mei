@@ -6,6 +6,7 @@ import pytest
 from support import (
     TestingSession,
     drain_jobs,
+    onboard,
     post_webhook,
     reset_state,
     webhook_envelope,
@@ -27,6 +28,7 @@ TOKEN = "EAAG-test-token-never-logged"
 
 def setup_function() -> None:
     reset_state()
+    onboard()
 
 
 def sender_with(handler) -> tuple[CloudApiOutboundSender, list[httpx.Request]]:

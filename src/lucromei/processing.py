@@ -16,6 +16,8 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from lucromei import onboarding
+from lucromei.config import get_settings
 from lucromei.conversation import ConversationService
 from lucromei.domain import ParseError
 from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, insert_ignore
@@ -84,6 +86,19 @@ def handle_process_message(session: Session, payload: dict[str, Any], ctx: JobCo
 def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str:
     if event.text is None:
         return TEXT_ONLY_REPLY
+    ledger = LedgerService(session)
+    business = ledger.get_or_create_business(event.sender)
+    # Serialize conversation state changes for this business across workers.
+    session.refresh(business, with_for_update=True)
+    if not onboarding.is_active(business):
+        return onboarding.handle(
+            session,
+            business,
+            message_id=event.external_id,
+            text=event.text,
+            now=ctx.now,
+            settings=get_settings(),
+        )
     command = ConversationService(session).handle(
         message_id=event.external_id,
         whatsapp_number=event.sender,
@@ -94,7 +109,7 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str:
     if command is not None:
         return command.reply
     try:
-        result = LedgerService(session).process(
+        result = ledger.process(
             message_id=event.external_id,
             whatsapp_number=event.sender,
             text=event.text,
