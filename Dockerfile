@@ -5,6 +5,9 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python -m pip install --no-cache-dir --upgrade "pip>=26.2,<27" \
     && python -m pip install --no-cache-dir .
+# Shipped so the same image can run `alembic upgrade head` (the lucromei-migrate Cloud Run job).
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 RUN chown 10001:10001 /app
 USER 10001:10001
