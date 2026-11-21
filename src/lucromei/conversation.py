@@ -85,6 +85,17 @@ _LIST_COMMANDS = {
     "extrato",
     "historico",
 }
+_SUPPORT_COMMANDS = {
+    "suporte",
+    "atendente",
+    "atendimento",
+    "falar com atendente",
+    "falar com alguem",
+    "falar com uma pessoa",
+    "reclamacao",
+    "problema",
+    "ajuda humana",
+}
 _HELP_COMMANDS = {"ajuda", "menu", "comandos", "o que voce faz", "como funciona", "help"}
 RECENT_LIMIT = 10
 HELP_TEXT = (
@@ -99,7 +110,8 @@ HELP_TEXT = (
     "• relatório do mês e PLANILHA (arquivo para Excel)\n\n"
     "Correções: DESFAZER apaga o último lançamento e CORRIGIR PARA 120 muda o valor dele.\n"
     "Privacidade: MEUS DADOS mostra tudo o que guardo e APAGAR MEUS DADOS apaga sua conta.\n"
-    "Assinatura: mande ASSINAR. Para não receber lembretes, mande PARAR LEMBRETES."
+    "Falar com uma pessoa: SUPORTE. Assinatura: ASSINAR.\n"
+    "Para não receber lembretes: PARAR LEMBRETES."
 )
 _MONTH_NAMES = (
     "janeiro",
@@ -196,6 +208,9 @@ class ConversationService:
         ) is not None:
             command_type = "reminders"
             reply = reminder_reply
+        elif normalized.rstrip(" ?!.") in _SUPPORT_COMMANDS:
+            command_type = "support"
+            reply = support_reply()
         elif normalized.rstrip(" ?!.") in _HELP_COMMANDS:
             command_type = "help"
             reply = HELP_TEXT
@@ -305,6 +320,19 @@ def format_recent(items: list[EffectiveTransaction], tz: ZoneInfo) -> str:
         )
     lines += ["", "Para desfazer o último, mande DESFAZER."]
     return "\n".join(lines)
+
+
+def support_reply() -> str:
+    from lucromei.config import get_settings
+
+    email = get_settings().contact_email
+    channel = f"mande um e-mail para {email}" if email else "responda aqui descrevendo o problema"
+    return (
+        f"Para falar com uma pessoa do LucroMEI, {channel}, informando o número do seu "
+        "WhatsApp e o que aconteceu (sem senhas ou dados bancários). Respondemos em até 2 dias "
+        "úteis.\n\nDicas rápidas: DESFAZER apaga o último lançamento, ÚLTIMOS LANÇAMENTOS "
+        "mostra o que foi anotado e AJUDA lista todos os comandos."
+    )
 
 
 def _utc_now() -> datetime:
