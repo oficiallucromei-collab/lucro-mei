@@ -32,8 +32,11 @@ class Settings(BaseSettings):
     openai_transcription_model: str = "gpt-4o-mini-transcribe"
     openai_transcription_timeout_seconds: float = Field(default=25.0, gt=0, le=60)
     # Terms of use shown during onboarding. Bump the version whenever the text changes.
-    terms_version: str = "2026-11-20"
+    terms_version: str = "2026-11-21"
+    # Public https link to the terms. The app serves them itself at /termos (see legal.py).
     terms_url: str = ""
+    # Contact for support and LGPD requests, shown in the published terms and policy.
+    contact_email: str = ""
     trial_days: int = 14
     # How long a question such as "despesa ou retirada?" stays open before it expires.
     pending_entry_ttl_hours: int = 24

@@ -59,8 +59,9 @@ def reset_state() -> None:
     settings.business_timezone = "America/Sao_Paulo"
     settings.worker_mode = "off"
     settings.job_max_attempts = 8
-    settings.terms_version = "2026-11-20"
+    settings.terms_version = "2026-11-21"
     settings.terms_url = "https://lucromei.example/termos"
+    settings.contact_email = ""
     settings.trial_days = 14
     settings.ai_api_key = ""  # tests never call a real model
     settings.ai_daily_calls_per_business = 30
@@ -90,7 +91,7 @@ def onboard(number: str = DEFAULT_SENDER, *, name: str = "Ana") -> str:
         session.add(
             TermsAcceptance(
                 business_id=business.id,
-                terms_version="2026-11-20",
+                terms_version="2026-11-21",
                 accepted_at=now,
                 source_message_id=f"onboarding-{business.id}",
                 accepted_text="aceito",

@@ -209,9 +209,14 @@ resource "google_cloud_run_v2_service" "test" {
       }
 
       env {
-        # Placeholder for the test service only. Real terms must be published before customers.
+        # The app publishes the terms at /termos and the privacy policy at /privacidade.
         name  = "LUCROMEI_TERMS_URL"
         value = var.terms_url
+      }
+
+      env {
+        name  = "LUCROMEI_CONTACT_EMAIL"
+        value = var.contact_email
       }
 
       dynamic "env" {

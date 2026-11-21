@@ -17,8 +17,10 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
+from lucromei import legal
 from lucromei.config import check_production_settings, get_settings, is_configured_secret
 from lucromei.db import SessionLocal, get_session
 from lucromei.domain import ParseError
@@ -161,6 +163,27 @@ internal_api = APIRouter(prefix="/v1", dependencies=[Depends(require_internal_ap
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.get("/termos", response_class=HTMLResponse, include_in_schema=False)
+def terms_page() -> HTMLResponse:
+    return _legal_response(legal.terms_html(get_settings()))
+
+
+@app.get("/privacidade", response_class=HTMLResponse, include_in_schema=False)
+def privacy_page() -> HTMLResponse:
+    return _legal_response(legal.privacy_html(get_settings()))
+
+
+def _legal_response(html: str) -> HTMLResponse:
+    return HTMLResponse(
+        html,
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/webhooks/whatsapp")

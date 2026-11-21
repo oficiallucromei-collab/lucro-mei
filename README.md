@@ -57,6 +57,9 @@ This initial scaffold includes:
 - onboarding on first contact: name, type of business, acceptance of the terms (version and
   date stored in `terms_acceptances`) and the start of a 14-day free trial; nothing is written
   to the ledger before the terms are accepted;
+- terms of use and privacy policy in plain Portuguese, served by the app at `/termos` and
+  `/privacidade` (`legal.py`), with the retention, grace and trial figures taken from the same
+  settings the code uses; bump `LUCROMEI_TERMS_VERSION` whenever the text changes;
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
 

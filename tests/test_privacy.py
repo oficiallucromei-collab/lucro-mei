@@ -94,7 +94,7 @@ def test_export_lists_profile_terms_and_effective_transactions() -> None:
     assert "Número do WhatsApp: +5511999999999" in export
     assert "Nome: Ana" in export
     assert "Tipo de negócio: barbearia" in export
-    assert "Termos aceitos: versão 2026-11-20" in export
+    assert "Termos aceitos: versão 2026-11-21" in export
     assert "Lançamentos (3):" in export
     assert "Entrada R$ 150,00 - recebi por um corte" in export
     assert "Despesa R$ 75,50 - gastei em produtos (corrigido)" in export
