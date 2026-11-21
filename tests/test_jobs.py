@@ -6,6 +6,7 @@ import pytest
 from support import (
     TestingSession,
     drain_jobs,
+    onboard,
     post_webhook,
     requires_postgres,
     reset_state,
@@ -39,6 +40,7 @@ from lucromei.worker import Worker
 
 def setup_function() -> None:
     reset_state()
+    onboard()
 
 
 class FlakySender(MockOutboundSender):

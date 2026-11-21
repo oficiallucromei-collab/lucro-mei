@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from support import (
     TestingSession,
     client,
+    onboard,
     reset_state,
     signed_webhook,
     whatsapp_payload,
@@ -29,6 +30,7 @@ def current_month_params() -> dict:
 
 def setup_function() -> None:
     reset_state()
+    onboard()
 
 
 def create_transaction(message_id: str, text: str) -> dict:

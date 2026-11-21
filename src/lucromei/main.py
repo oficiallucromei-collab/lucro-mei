@@ -17,11 +17,12 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-from lucromei.config import get_settings, is_configured_secret
+from lucromei.config import check_production_settings, get_settings, is_configured_secret
 from lucromei.db import SessionLocal, get_session
 from lucromei.domain import ParseError
 from lucromei.jobs import insert_ignore
 from lucromei.models import InboundEvent, utc_now
+from lucromei.onboarding import OnboardingRequired
 from lucromei.processing import enqueue_inbound_processing, record_delivery_statuses
 from lucromei.schemas import (
     CorrectionRequest,
@@ -73,6 +74,7 @@ app = FastAPI(
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
     lifespan=lifespan,
 )
+check_production_settings(get_settings())
 app.state.whatsapp_sender = build_sender(get_settings())
 app.state.worker = None
 
@@ -196,6 +198,8 @@ def process_message(
             whatsapp_number=payload.whatsapp_number,
             text=payload.text,
         )
+    except OnboardingRequired as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     transaction = result.transaction

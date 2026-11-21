@@ -36,6 +36,9 @@ This initial scaffold includes:
   the idempotency key) and answers 200; a PostgreSQL job queue (`SELECT ... FOR UPDATE SKIP
   LOCKED`) then processes it and sends the reply, with bounded retries and exponential backoff;
 - idempotent WhatsApp commands for undo, corrections, and monthly summaries;
+- onboarding on first contact: name, type of business, acceptance of the terms (version and
+  date stored in `terms_acceptances`) and the start of a 14-day free trial; nothing is written
+  to the ledger before the terms are accepted;
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
 
@@ -101,5 +104,5 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
 ## Roadmap
 
 2. Structured AI fallback for messages that deterministic rules cannot classify.
-3. Minimal onboarding and subscription portal.
+3. Subscription portal and billing (the trial is recorded, not yet enforced).
 
