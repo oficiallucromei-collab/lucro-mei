@@ -8,6 +8,8 @@ from sqlalchemy.orm import sessionmaker
 
 from lucromei.ai import MessageInterpreter, build_interpreter
 from lucromei.audio import AudioTranscriber
+from lucromei.billing import StripeCheckout, StripeClient
+from lucromei.billing import configured as billing_configured
 from lucromei.config import Settings, get_settings
 from lucromei.jobs import JobContext, JobQueue, queue_health, utc_now
 from lucromei.observability import (
@@ -47,8 +49,13 @@ class Worker:
         self.transcriber = (
             AudioTranscriber(self.settings) if self.settings.whatsapp_audio_enabled else None
         )
-        self.interpreter = interpreter if interpreter is not None else build_interpreter(
-            self.settings
+        self.interpreter = (
+            interpreter if interpreter is not None else build_interpreter(self.settings)
+        )
+        self.checkout = (
+            StripeCheckout(self.settings, StripeClient(self.settings))
+            if billing_configured(self.settings)
+            else None
         )
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -63,6 +70,7 @@ class Worker:
                 "sender": self.sender,
                 "transcriber": self.transcriber,
                 "interpreter": self.interpreter,
+                "checkout": self.checkout,
                 "max_attempts": self.settings.job_max_attempts,
             },
         )

@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     trial_enforcement_enabled: bool = True
     # Monthly price shown to users, in centavos. No charge happens without a payment provider.
     subscription_price_cents: int = Field(default=2490, ge=0)
+    # Stripe, TEST MODE ONLY (billing.py refuses live keys). Off until all four are set.
+    stripe_secret_key: str = Field(default="", repr=False)
+    stripe_webhook_secret: str = Field(default="", repr=False)
+    stripe_price_id: str = ""
+    # Public https address of this service, for Stripe's return pages.
+    public_url: str = ""
     # Proactive notices (end of trial, reminders), sent by the hourly maintenance job. Off until
     # the templates in templates.py are approved at Meta. Only between these local hours.
     notifications_enabled: bool = False

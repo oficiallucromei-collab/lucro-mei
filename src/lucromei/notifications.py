@@ -120,6 +120,11 @@ def _notices_for(
     return notices
 
 
+def needs_template(session: Session, business: Business, now: datetime) -> bool:
+    """Is the 24-hour window closed, so only an approved template will be delivered?"""
+    return _last_message_at(session, business) < now - SERVICE_WINDOW
+
+
 def _last_message_at(session: Session, business: Business) -> datetime:
     last = session.scalar(
         select(func.max(InboundEvent.sent_at)).where(

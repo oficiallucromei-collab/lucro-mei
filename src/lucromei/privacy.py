@@ -32,6 +32,7 @@ from lucromei.models import (
     OutboundMessage,
     PendingEntry,
     Subscription,
+    SubscriptionEvent,
     TermsAcceptance,
     Transaction,
     TransactionEvent,
@@ -315,6 +316,11 @@ def delete_business_data(session: Session, business: Business) -> None:
         delete(CommandReceipt).where(CommandReceipt.business_id == business_id),
         delete(AIUsage).where(AIUsage.business_id == business_id),
         delete(TermsAcceptance).where(TermsAcceptance.business_id == business_id),
+        delete(SubscriptionEvent).where(
+            SubscriptionEvent.subscription_id.in_(
+                select(Subscription.id).where(Subscription.business_id == business_id)
+            )
+        ),
         delete(Subscription).where(Subscription.business_id == business_id),
         delete(DeliveryStatusEvent).where(
             DeliveryStatusEvent.provider_message_id.in_(provider_ids)

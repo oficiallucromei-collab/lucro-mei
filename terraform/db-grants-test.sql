@@ -21,6 +21,9 @@ GRANT SELECT, INSERT, DELETE ON whatsapp_status_events, terms_acceptances, ai_us
 -- Subscription status follows the payment provider; deleted only with the account.
 GRANT SELECT, INSERT, UPDATE, DELETE ON subscriptions TO lucromei_test_runtime;
 
+-- Payment provider webhooks: stored once, deleted only with the account.
+GRANT SELECT, INSERT, DELETE ON subscription_events TO lucromei_test_runtime;
+
 -- The anonymous proof of an erasure is never deleted.
 GRANT SELECT, INSERT, UPDATE ON deletion_requests TO lucromei_test_runtime;
 

@@ -21,12 +21,12 @@ from fastapi import (
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from lucromei import legal
+from lucromei import billing, legal
 from lucromei.config import check_production_settings, get_settings, is_configured_secret
 from lucromei.db import SessionLocal, get_session
 from lucromei.domain import ParseError
-from lucromei.jobs import insert_ignore
-from lucromei.models import InboundEvent, utc_now
+from lucromei.jobs import enqueue, insert_ignore
+from lucromei.models import InboundEvent, SubscriptionEvent, new_id, utc_now
 from lucromei.observability import (
     accept_correlation_id,
     configure_logging,
@@ -35,6 +35,7 @@ from lucromei.observability import (
 )
 from lucromei.onboarding import OnboardingRequired
 from lucromei.processing import (
+    STRIPE_SYNC,
     enqueue_audio_transcription,
     enqueue_inbound_processing,
     record_delivery_statuses,
@@ -72,7 +73,6 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
 }
 SessionDep = Annotated[Session, Depends(get_session)]
-
 
 
 @asynccontextmanager
@@ -114,6 +114,7 @@ check_production_settings(get_settings())
 app.state.whatsapp_sender = build_sender(get_settings())
 app.state.worker = None
 
+
 @app.middleware("http")
 async def correlation_middleware(request: Request, call_next):
     """Give every request a correlation ID and log it without query strings or bodies."""
@@ -143,7 +144,6 @@ async def correlation_middleware(request: Request, call_next):
             },
         )
         correlation_id.reset(token)
-
 
 
 def require_internal_api_key(
@@ -338,6 +338,65 @@ async def receive_whatsapp_webhook(
         "duplicates": duplicates,
         "statuses": statuses,
     }
+
+
+@app.post("/webhooks/stripe")
+async def receive_stripe_webhook(request: Request, session: SessionDep) -> dict[str, bool]:
+    """Stripe (test mode): verify, store the event once, sync in the background."""
+    settings = get_settings()
+    if not billing.configured(settings):
+        raise HTTPException(status_code=404, detail="Not Found")
+    body = await _read_limited(request, settings.webhook_max_body_bytes)
+    try:
+        event = billing.verify_event(
+            body, request.headers.get("Stripe-Signature", ""), settings.stripe_webhook_secret
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    event_id, event_type = event.get("id"), event.get("type")
+    if event.get("livemode") is not False or not isinstance(event_id, str):
+        return {"received": True}  # live-mode or malformed events are never acted on
+    if event_type not in billing.EVENTS:
+        return {"received": True}
+    stripe_id, our_id = billing.subscription_reference(event)
+    created = insert_ignore(
+        session,
+        SubscriptionEvent,
+        {
+            "id": new_id(),
+            "provider": "stripe",
+            "provider_event_id": event_id[:255],
+            "event_type": event_type[:80],
+            "provider_subscription_id": (stripe_id or "")[:255] or None,
+            "subscription_id": (our_id or "")[:36] or None,
+            "received_at": utc_now(),
+        },
+    )
+    if created and (stripe_id or our_id):
+        enqueue(
+            session,
+            STRIPE_SYNC,
+            {"stripe_subscription_id": stripe_id, "subscription_id": our_id},
+            dedupe_key=f"{STRIPE_SYNC}:{event_id[:200]}",
+            max_attempts=settings.job_max_attempts,
+        )
+    session.commit()
+    logger.info(
+        "stripe_webhook_received", extra={"outcome": event_type, "duplicates": int(not created)}
+    )
+    if created and (worker := getattr(request.app.state, "worker", None)) is not None:
+        worker.wake()
+    return {"received": True}
+
+
+@app.get("/assinatura/obrigado", response_class=HTMLResponse, include_in_schema=False)
+def subscription_thanks() -> HTMLResponse:
+    return _legal_response(legal.checkout_html(get_settings(), completed=True))
+
+
+@app.get("/assinatura/cancelada", response_class=HTMLResponse, include_in_schema=False)
+def subscription_cancelled() -> HTMLResponse:
+    return _legal_response(legal.checkout_html(get_settings(), completed=False))
 
 
 @internal_api.post(

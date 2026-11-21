@@ -329,3 +329,19 @@ class Subscription(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SubscriptionEvent(Base):
+    """A payment provider webhook, stored once (its event ID is the idempotency key).
+
+    Only the event's type and the subscription it names are kept, never card or customer data.
+    """
+
+    __tablename__ = "subscription_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    provider_subscription_id: Mapped[str | None] = mapped_column(String(255))
+    subscription_id: Mapped[str | None] = mapped_column(String(36))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
