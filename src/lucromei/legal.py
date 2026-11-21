@@ -132,7 +132,8 @@ a data do aceite dos termos e as datas do teste grátis.</li>
 áudio, a transcrição desse áudio. O arquivo de áudio não é guardado.</li>
 <li><strong>Lançamentos:</strong> tipo, valor, data, descrição e o histórico de correções.</li>
 <li><strong>Registros técnicos:</strong> identificadores das mensagens, status de entrega do
-WhatsApp e quantas vezes a inteligência artificial foi usada (sem o conteúdo).</li>
+WhatsApp, quantas vezes a inteligência artificial foi usada (sem o conteúdo) e de qual
+campanha de divulgação você veio, quando for o caso.</li>
 </ul>
 
 <h2>2. Para que usamos</h2>

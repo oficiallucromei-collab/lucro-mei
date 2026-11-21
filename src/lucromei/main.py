@@ -18,10 +18,10 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from lucromei import billing, legal
+from lucromei import billing, growth, legal
 from lucromei.config import check_production_settings, get_settings, is_configured_secret
 from lucromei.db import SessionLocal, get_session
 from lucromei.domain import ParseError
@@ -168,6 +168,33 @@ def _secrets_match(received: str, expected: str) -> bool:
 
 
 internal_api = APIRouter(prefix="/v1", dependencies=[Depends(require_internal_api_key)])
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def landing(request: Request) -> HTMLResponse:
+    return _legal_response(growth.landing_html(get_settings(), dict(request.query_params)))
+
+
+_click_limiter = SlidingWindowLimiter(30)
+
+
+@app.get("/experimentar", include_in_schema=False)
+def try_on_whatsapp(request: Request, session: SessionDep) -> Response:
+    settings = get_settings()
+    if not settings.whatsapp_display_number.isdigit():
+        raise HTTPException(status_code=404, detail="Not Found")
+    client_id = client_key(
+        request.headers.get("X-Forwarded-For"), request.client.host if request.client else None
+    )
+    if not _click_limiter.allow(client_id):
+        raise HTTPException(status_code=429, detail="Muitas requisições.")
+    code = growth.new_click(session, growth.clean_tags(request.query_params), utc_now())
+    session.commit()
+    return RedirectResponse(
+        growth.whatsapp_link(settings.whatsapp_display_number, code),
+        status_code=303,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/health", response_model=HealthResponse)

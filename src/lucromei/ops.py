@@ -241,6 +241,54 @@ def reapply_deletions(session: Session, now: datetime) -> int:
     return 0
 
 
+FUNNEL_SQL = """
+WITH early AS (
+  SELECT a.business_id, count(t.id) AS entries
+  FROM acquisitions a
+  JOIN businesses b ON b.id = a.business_id
+  LEFT JOIN transactions t ON t.business_id = a.business_id
+    AND b.trial_started_at IS NOT NULL
+    AND t.created_at < b.trial_started_at + interval '48 hours'
+  GROUP BY a.business_id
+),
+people AS (
+  SELECT a.source, coalesce(a.campaign, '-') AS campaign,
+    count(*) AS started,
+    count(*) FILTER (WHERE b.onboarding_step = 'active') AS onboarded,
+    count(*) FILTER (WHERE e.entries >= 3) AS activated,
+    count(*) FILTER (WHERE EXISTS (SELECT 1 FROM subscriptions s
+      WHERE s.business_id = a.business_id AND s.status = 'active'
+      AND s.current_period_end > now())) AS paying
+  FROM acquisitions a
+  JOIN businesses b ON b.id = a.business_id
+  JOIN early e ON e.business_id = a.business_id
+  WHERE a.created_at >= :since
+  GROUP BY 1, 2
+),
+clicks AS (
+  SELECT coalesce(tags->>'utm_source', 'direto') AS source,
+    coalesce(tags->>'utm_campaign', '-') AS campaign, count(*) AS clicks
+  FROM acquisition_clicks WHERE created_at >= :since GROUP BY 1, 2
+)
+SELECT coalesce(p.source, c.source), coalesce(p.campaign, c.campaign),
+  coalesce(c.clicks, 0), coalesce(p.started, 0), coalesce(p.onboarded, 0),
+  coalesce(p.activated, 0), coalesce(p.paying, 0)
+FROM people p FULL OUTER JOIN clicks c ON c.source = p.source AND c.campaign = p.campaign
+ORDER BY 4 DESC, 3 DESC
+"""
+
+
+def funnel(engine, days: int) -> int:
+    """Per campaign: clicks, conversations started, onboarded, activated, paying."""
+    since = datetime.now(UTC) - timedelta(days=days)
+    with engine.connect() as connection:
+        rows = connection.execute(text(FUNNEL_SQL), {"since": since}).all()
+    print("origem | campanha | cliques | conversas | cadastrados | ativados (3+ em 48h) | pagantes")
+    for row in rows or [("(nenhum)",)]:
+        print(" | ".join(str(value) for value in row))
+    return 0
+
+
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
@@ -268,10 +316,14 @@ def main(argv: list[str] | None = None) -> int:
     requeue.add_argument("--kind", required=True)
     requeue.add_argument("--hours", type=int, default=24)
     commands.add_parser("reapply-deletions", help="refazer exclusões depois de restaurar backup")
+    funnel_cmd = commands.add_parser("funnel", help="funil por campanha (contagens)")
+    funnel_cmd.add_argument("--days", type=int, default=30)
     args = parser.parse_args(argv)
     engine = create_engine(get_settings().database_url)
     if args.command == "pilot-check":
         return pilot_check(engine, args.hours)
+    if args.command == "funnel":
+        return funnel(engine, args.days)
     now = datetime.now(UTC)
     with Session(engine) as session:
         if args.command == "find-business":

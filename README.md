@@ -88,6 +88,12 @@ This initial scaffold includes:
   injection neutralized) built at send time and never stored; "relatório do mês" adds the
   change from the previous month, the best day and the largest expenses, always without
   accounting, tax or investment advice;
+- acquisition (ported from `codex/production-deployment`, migrations renumbered): landing
+  page at `/`, `/experimentar?utm_*` stores identifier-like campaign tags under a one-use
+  code and opens WhatsApp with it; the first message claims the code through the existing
+  onboarding (`acquisitions`, first touch, no personal data); `python -m lucromei.ops funnel`
+  shows clicks, conversations, onboarded, activated (3+ entries in 48 h) and paying per
+  campaign; `LUCROMEI_WHATSAPP_DISPLAY_NUMBER` turns the button on;
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
 

@@ -110,3 +110,9 @@ variable "stripe_price_id" {
   type        = string
   default     = ""
 }
+
+variable "whatsapp_display_number" {
+  description = "Digits of the WhatsApp number linked from the landing page (/experimentar)."
+  type        = string
+  default     = ""
+}

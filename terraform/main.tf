@@ -243,6 +243,12 @@ resource "google_cloud_run_v2_service" "test" {
       }
 
       env {
+        # Number the landing page's button opens in WhatsApp (digits). Empty: no button.
+        name  = "LUCROMEI_WHATSAPP_DISPLAY_NUMBER"
+        value = var.whatsapp_display_number
+      }
+
+      env {
         name  = "LUCROMEI_PUBLIC_URL"
         value = var.public_url
       }

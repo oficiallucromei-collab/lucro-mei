@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     stripe_secret_key: str = Field(default="", repr=False)
     stripe_webhook_secret: str = Field(default="", repr=False)
     stripe_price_id: str = ""
+    # Digits of the WhatsApp number the landing page links to (wa.me). No button when empty.
+    whatsapp_display_number: str = ""
     # Public https address of this service, for Stripe's return pages.
     public_url: str = ""
     # Proactive notices (end of trial, reminders), sent by the hourly maintenance job. Off until
