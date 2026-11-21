@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     trial_days: int = 14
     # How long a question such as "despesa ou retirada?" stays open before it expires.
     pending_entry_ttl_hours: int = 24
+    # AI fallback for messages the rules cannot read. Off unless an API key is set. The AI only
+    # suggests; every suggestion is validated and confirmed by the user before it is recorded.
+    ai_api_key: str = Field(default="", repr=False)
+    ai_model: str = "claude-haiku-5-5"
+    ai_timeout_seconds: float = 15.0
+    ai_max_input_chars: int = 300
+    ai_daily_calls_per_business: int = 30
+    # Prices in millionths of a US dollar per million tokens (claude-haiku-5-5: $0.10 / $0.50).
+    ai_input_price_micro_usd_per_mtok: int = 100_000
+    ai_output_price_micro_usd_per_mtok: int = 500_000
     # Background worker that processes received messages and sends replies. "embedded" runs it
     # inside the web process; "off" leaves it to `python -m lucromei.worker`.
     worker_mode: str = "embedded"

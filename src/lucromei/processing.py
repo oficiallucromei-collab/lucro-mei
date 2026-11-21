@@ -13,15 +13,22 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from lucromei import clarification, onboarding
+from lucromei import ai, clarification, onboarding
 from lucromei.config import get_settings
 from lucromei.conversation import ConversationService
 from lucromei.domain import AmbiguousTransaction, ParseError
 from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, insert_ignore
-from lucromei.models import DeliveryStatusEvent, InboundEvent, OutboundMessage, new_id
+from lucromei.models import (
+    AIUsage,
+    Business,
+    DeliveryStatusEvent,
+    InboundEvent,
+    OutboundMessage,
+    new_id,
+)
 from lucromei.service import LedgerService
 from lucromei.whatsapp import (
     OutboundSender,
@@ -158,10 +165,80 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str:
     except ParseError:
         if pending is not None:
             return "Não entendi a resposta. " + clarification.question(pending)
-        return NOT_UNDERSTOOD_REPLY
+        return ai_fallback(session, business, event, ctx) or NOT_UNDERSTOOD_REPLY
     return format_confirmation(
         result.transaction.transaction_type.value, result.transaction.amount_cents
     )
+
+
+def ai_fallback(
+    session: Session, business: Business, event: InboundEvent, ctx: JobContext
+) -> str | None:
+    """Ask the AI to read a message the rules could not. Returns a confirmation question.
+
+    The suggestion becomes a pending entry: nothing is recorded until the user answers SIM.
+    """
+
+    interpreter = ctx.services.get("interpreter")
+    settings = get_settings()
+    text = event.text or ""
+    if interpreter is None or len(text) > settings.ai_max_input_chars:
+        return None
+    since = ctx.now - timedelta(days=1)
+    calls_today = session.scalar(
+        select(func.count(AIUsage.id)).where(
+            AIUsage.business_id == business.id, AIUsage.created_at >= since
+        )
+    )
+    if calls_today >= settings.ai_daily_calls_per_business:
+        logger.warning("ai_daily_limit_reached", extra={"business_id": business.id})
+        return None
+
+    result = interpreter.interpret(text)
+    session.add(
+        AIUsage(
+            business_id=business.id,
+            inbound_message_id=event.external_id,
+            model=result.model[:64],
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cost_micro_usd=ai.cost_micro_usd(
+                result.input_tokens,
+                result.output_tokens,
+                input_price=settings.ai_input_price_micro_usd_per_mtok,
+                output_price=settings.ai_output_price_micro_usd_per_mtok,
+            ),
+            latency_ms=result.latency_ms,
+            outcome=result.outcome,
+            created_at=ctx.now,
+        )
+    )
+    logger.info(
+        "ai_fallback_used",
+        extra={"outcome": result.outcome, "latency_ms": result.latency_ms},
+    )
+    if result.outcome != ai.UNDERSTOOD or result.suggestion is None:
+        return None
+    pending = clarification.create_pending(
+        session,
+        business,
+        source_message_id=event.external_id,
+        source_text=text,
+        amount_cents=result.suggestion.amount_cents,
+        description=_description_from_user_text(text),
+        occurred_at=event.sent_at,
+        candidates=result.suggestion.candidates,
+        origin="ai",
+        now=ctx.now,
+        ttl=timedelta(hours=settings.pending_entry_ttl_hours),
+    )
+    return clarification.question(pending)
+
+
+def _description_from_user_text(text: str) -> str:
+    """The user's own words, never the model's: the AI cannot inject text into the ledger."""
+
+    return " ".join(text.lower().split())[:120] or "lançamento"
 
 
 def queue_reply(

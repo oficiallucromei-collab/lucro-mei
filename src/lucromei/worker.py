@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from sqlalchemy.orm import sessionmaker
 
+from lucromei.ai import MessageInterpreter, build_interpreter
 from lucromei.config import Settings, get_settings
 from lucromei.jobs import JobContext, JobQueue, utc_now
 from lucromei.processing import DEAD_HOOKS, HANDLERS
@@ -29,10 +30,14 @@ class Worker:
         session_factory: sessionmaker,
         sender: OutboundSender,
         settings: Settings | None = None,
+        interpreter: MessageInterpreter | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.queue = build_queue(session_factory, self.settings)
         self.sender = sender
+        self.interpreter = interpreter if interpreter is not None else build_interpreter(
+            self.settings
+        )
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -40,7 +45,11 @@ class Worker:
     def context(self) -> JobContext:
         return JobContext(
             now=utc_now(),
-            services={"sender": self.sender, "max_attempts": self.settings.job_max_attempts},
+            services={
+                "sender": self.sender,
+                "interpreter": self.interpreter,
+                "max_attempts": self.settings.job_max_attempts,
+            },
         )
 
     def run_once(self) -> int:

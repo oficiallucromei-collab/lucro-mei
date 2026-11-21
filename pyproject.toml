@@ -5,6 +5,7 @@ description = "WhatsApp-first financial assistant for Brazilian microentrepreneu
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14,<2",
+  "anthropic>=2.12,<3",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "psycopg[binary]>=3.2,<4",
