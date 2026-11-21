@@ -51,7 +51,14 @@ locals {
   }
   secret_versions = merge(local.pinned_secret_versions, var.secret_versions)
 
-  secret_ids = toset(concat(values(local.secret_env), ["lucromei-database-url"]))
+  # Owner credentials for schema migrations, used only by the migration job: the app's own
+  # database role cannot change the schema.
+  migrate_database_secret = "lucromei-test-migrate-database-url"
+
+  secret_ids = toset(concat(
+    values(local.secret_env),
+    ["lucromei-database-url", local.migrate_database_secret],
+  ))
 }
 
 resource "google_project_service" "api" {
