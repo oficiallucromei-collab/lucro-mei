@@ -17,8 +17,7 @@ resource "google_artifact_registry_repository_iam_member" "build_writer" {
   member     = "serviceAccount:${google_service_account.build.email}"
 }
 
-# Project-level grants (roles/logging.logWriter for the build account) need a project IAM
-# admin and are applied by the project owner outside Terraform; see README.
+# Grants that need an IAM admin (log writing, actAs on lucromei-runtime) are in iam.tf.
 
 resource "google_storage_bucket" "build_source" {
   name                        = "${local.project_id}-release-source-312975377897"
@@ -57,10 +56,6 @@ resource "google_cloud_run_v2_job_iam_member" "build_migrator" {
   role     = "roles/run.developer"
   member   = "serviceAccount:${google_service_account.build.email}"
 }
-
-# Updating the service and job keeps them running as lucromei-runtime, so lucromei-build also
-# needs roles/iam.serviceAccountUser on it. Setting that needs iam.serviceAccounts.setIamPolicy,
-# so the project owner applies it outside Terraform; see README.
 
 output "build_source_bucket" {
   description = "Private staging bucket for reviewed release source archives."

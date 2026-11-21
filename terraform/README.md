@@ -40,29 +40,18 @@ terraform -chdir=terraform plan
 A plan with no changes means the live project matches this configuration. The
 services, secrets and repository have `prevent_destroy` or deletion protection.
 
-### Grants the project owner applies
+### IAM grants
 
-These need IAM admin rights the usual Terraform account lacks, so they are kept out
-of Terraform:
+Every grant is tracked here. `iam.tf` holds the ones that need IAM admin rights:
 
-```sh
-# Lets Cloud Build write logs as lucromei-build (needed by cloudbuild.yaml).
-gcloud projects add-iam-policy-binding lucro-mei \
-  --member=serviceAccount:lucromei-build@lucro-mei.iam.gserviceaccount.com \
-  --role=roles/logging.logWriter
+- `roles/logging.logWriter` on the project for `lucromei-build`;
+- `roles/iam.serviceAccountUser` on `lucromei-runtime` for `lucromei-build`;
+- `roles/secretmanager.admin` on the project for the Cloud Build service agent, which
+  stores the GitHub connection's token.
 
-# Lets lucromei-build deploy the service and job, which run as lucromei-runtime.
-gcloud iam service-accounts add-iam-policy-binding \
-  lucromei-runtime@lucro-mei.iam.gserviceaccount.com --project=lucro-mei \
-  --member=serviceAccount:lucromei-build@lucro-mei.iam.gserviceaccount.com \
-  --role=roles/iam.serviceAccountUser
-
-# Lets the Cloud Build service agent store the GitHub connection's token
-# (needed once, to create the lucromei-github connection).
-gcloud projects add-iam-policy-binding lucro-mei \
-  --member=serviceAccount:service-312975377897@gcp-sa-cloudbuild.iam.gserviceaccount.com \
-  --role=roles/secretmanager.admin
-```
+Changing these needs an IAM admin (for example Owner). Planning them needs
+`getIamPolicy` on the project and on `lucromei-runtime`, so the account that runs
+plans also needs a read-only IAM role such as `roles/iam.securityReviewer`.
 
 ## Release pipeline
 
@@ -88,7 +77,7 @@ The pipeline owns the image of the service and the job. Terraform ignores their
 The `lucromei-release` trigger runs the pipeline on every push to `main`. It needs a
 Cloud Build connection to GitHub, which is set up once by hand:
 
-1. The project owner applies the `secretmanager.admin` grant above.
+1. Apply `iam.tf` (the `secretmanager.admin` grant for the Cloud Build service agent).
 2. Create the connection. Open the link it prints, authorize, and install the Google
    Cloud Build GitHub App on `oficiallucromei-collab/lucro-mei`:
 

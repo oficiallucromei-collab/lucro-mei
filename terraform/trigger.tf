@@ -42,5 +42,7 @@ resource "google_cloudbuild_trigger" "release" {
   depends_on = [
     google_cloud_run_v2_service_iam_member.build_deployer,
     google_cloud_run_v2_job_iam_member.build_migrator,
+    google_project_iam_member.build_log_writer,
+    google_service_account_iam_member.build_acts_as_runtime,
   ]
 }
