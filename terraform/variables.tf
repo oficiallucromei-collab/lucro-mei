@@ -31,12 +31,18 @@ variable "secret_versions" {
 }
 
 variable "terms_url" {
-  description = "Public https link to the terms of use shown during onboarding."
+  description = "Public https link to the terms of use shown during onboarding. The app serves them at /termos."
   type        = string
-  default     = "https://lucromei.example/termos-provisorio"
+  default     = "https://lucromei-test-vn7ehb54iq-rj.a.run.app/termos"
 
   validation {
     condition     = can(regex("^https://", var.terms_url))
     error_message = "The terms URL must use https."
   }
+}
+
+variable "contact_email" {
+  description = "Support and LGPD contact shown in the published terms and privacy policy."
+  type        = string
+  default     = "oficiallucromei@gmail.com"
 }

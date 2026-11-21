@@ -49,7 +49,7 @@ def test_full_onboarding_records_terms_and_starts_trial() -> None:
 
     terms = say("m3", "Barbearia")
     assert "Termos de Uso" in terms
-    assert "versão 2026-11-20" in terms
+    assert "versão 2026-11-21" in terms
     assert "https://lucromei.example/termos" in terms
     assert "responda ACEITO" in terms
 
@@ -70,7 +70,7 @@ def test_full_onboarding_records_terms_and_starts_trial() -> None:
     assert (ends - started).days == 14
     with TestingSession() as session:
         acceptance = session.query(TermsAcceptance).one()
-        assert acceptance.terms_version == "2026-11-20"
+        assert acceptance.terms_version == "2026-11-21"
         assert acceptance.source_message_id == "m4"
         assert acceptance.accepted_text == "Aceito"
         assert acceptance.accepted_at is not None
