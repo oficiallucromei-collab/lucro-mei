@@ -1,7 +1,7 @@
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PLACEHOLDER_SECRET = "change-me"
@@ -62,6 +62,22 @@ class Settings(BaseSettings):
     job_max_attempts: int = 8
     # Must be longer than the slowest job (the WhatsApp HTTP timeout).
     job_lease_seconds: int = 120
+
+    @field_validator("database_url")
+    @classmethod
+    def _use_psycopg3(cls, value: str) -> str:
+        return normalize_database_url(value)
+
+
+def normalize_database_url(url: str) -> str:
+    """Use psycopg 3 for plain PostgreSQL URLs, as Neon and most providers hand them out.
+
+    SQLAlchemy reads "postgresql://" as the psycopg2 driver, which is not installed.
+    """
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix) :]
+    return url
 
 
 def is_configured_secret(value: str) -> bool:
