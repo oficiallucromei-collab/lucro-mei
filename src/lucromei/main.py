@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import (
@@ -38,6 +39,7 @@ from lucromei.processing import (
     enqueue_inbound_processing,
     record_delivery_statuses,
 )
+from lucromei.ratelimit import SlidingWindowLimiter, client_key
 from lucromei.schemas import (
     CorrectionRequest,
     HealthResponse,
@@ -63,6 +65,12 @@ from lucromei.whatsapp import (
 from lucromei.worker import Worker
 
 logger = logging.getLogger(__name__)
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
@@ -118,6 +126,8 @@ async def correlation_middleware(request: Request, call_next):
         response = await call_next(request)
         status_code = response.status_code
         response.headers["X-Request-ID"] = cid
+        for header, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(header, value)
         return response
     finally:
         route = request.scope.get("route")
@@ -175,6 +185,11 @@ def privacy_page() -> HTMLResponse:
     return _legal_response(legal.privacy_html(get_settings()))
 
 
+@app.get("/exclusao-de-dados", response_class=HTMLResponse, include_in_schema=False)
+def deletion_page() -> HTMLResponse:
+    return _legal_response(legal.deletion_html(get_settings()))
+
+
 def _legal_response(html: str) -> HTMLResponse:
     return HTMLResponse(
         html,
@@ -202,6 +217,40 @@ def verify_whatsapp_webhook(
     return Response(content=challenge, media_type="text/plain")
 
 
+@dataclass(slots=True)
+class _WebhookLimiters:
+    requests: SlidingWindowLimiter
+    invalid: SlidingWindowLimiter
+
+
+_limiters: _WebhookLimiters | None = None
+
+
+def _webhook_limiters(settings) -> _WebhookLimiters:
+    global _limiters
+    if (
+        _limiters is None
+        or _limiters.requests.limit != settings.webhook_requests_per_minute
+        or _limiters.invalid.limit != settings.webhook_invalid_signatures_per_minute
+    ):
+        _limiters = _WebhookLimiters(
+            SlidingWindowLimiter(settings.webhook_requests_per_minute),
+            SlidingWindowLimiter(settings.webhook_invalid_signatures_per_minute),
+        )
+    return _limiters
+
+
+async def _read_limited(request: Request, limit: int) -> bytes:
+    """Read the body, refusing it as soon as it exceeds `limit` (chunked uploads included)."""
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise HTTPException(status_code=413, detail="Corpo do webhook grande demais.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @app.post("/webhooks/whatsapp")
 async def receive_whatsapp_webhook(
     request: Request,
@@ -215,10 +264,23 @@ async def receive_whatsapp_webhook(
     job, in a single transaction, and the request returns 200.
     """
 
-    body = await request.body()
+    settings = get_settings()
+    client = client_key(
+        request.headers.get("X-Forwarded-For"), request.client.host if request.client else None
+    )
+    limiters = _webhook_limiters(settings)
+    if limiters.invalid.blocked(client) or not limiters.requests.allow(client):
+        logger.warning("webhook_rate_limited", extra={"outcome": "too_many_requests"})
+        raise HTTPException(status_code=429, detail="Muitas requisições.")
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > settings.webhook_max_body_bytes:
+        raise HTTPException(status_code=413, detail="Corpo do webhook grande demais.")
+    body = await _read_limited(request, settings.webhook_max_body_bytes)
     try:
-        verify_signature(body, signature, get_settings().whatsapp_app_secret)
+        verify_signature(body, signature, settings.whatsapp_app_secret)
     except InvalidWebhookSignature as exc:
+        limiters.invalid.allow(client)
+        logger.warning("webhook_signature_rejected", extra={"outcome": "invalid_signature"})
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     try:
         payload = json.loads(body)
@@ -228,7 +290,6 @@ async def receive_whatsapp_webhook(
     messages = extract_inbound_messages(payload)
     accepted = duplicates = 0
     now = utc_now()
-    settings = get_settings()
     for message in messages:
         is_audio = message.message_type == "audio" and settings.whatsapp_audio_enabled
         if is_audio and (

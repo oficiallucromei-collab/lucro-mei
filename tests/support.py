@@ -13,6 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from lucromei import main as main_module
 from lucromei.config import get_settings
 from lucromei.db import get_session
 from lucromei.main import app
@@ -72,6 +73,7 @@ def reset_state() -> None:
     settings.privacy_hash_key = "test-privacy-key-0123456789abcdef"
     app.state.whatsapp_sender = MockOutboundSender()
     app.state.worker = None
+    main_module._limiters = None
 
 
 def onboard(number: str = DEFAULT_SENDER, *, name: str = "Ana") -> str:

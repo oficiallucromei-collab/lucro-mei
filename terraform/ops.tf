@@ -62,3 +62,11 @@ resource "google_cloud_run_v2_job" "ops" {
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]
 }
+
+# Lets the release pipeline move the job to each new image (cloudbuild.yaml).
+resource "google_cloud_run_v2_job_iam_member" "build_ops_updater" {
+  name     = google_cloud_run_v2_job.ops.name
+  location = local.region
+  role     = "roles/run.developer"
+  member   = "serviceAccount:${google_service_account.build.email}"
+}
