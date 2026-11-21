@@ -16,11 +16,11 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from lucromei import ai, clarification, onboarding, privacy
+from lucromei import ai, batch, clarification, onboarding, privacy
 from lucromei.audio import AudioError
 from lucromei.config import get_business_timezone, get_settings
 from lucromei.conversation import ConversationService
-from lucromei.domain import AmbiguousTransaction, InvalidDate, ParseError
+from lucromei.domain import AmbiguousTransaction, InvalidDate, ParseError, TransactionType
 from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, insert_ignore, utc_now
 from lucromei.models import (
     AIUsage,
@@ -54,7 +54,8 @@ MAINTENANCE = "maintenance"
 DELETE_ACCOUNT = "delete_account"
 
 NOT_UNDERSTOOD_REPLY = (
-    "Não entendi se isso é entrada, despesa ou retirada. Envie uma operação por mensagem."
+    "Não entendi se isso é entrada, despesa ou retirada, ou qual é o valor. "
+    "Exemplo: Recebi 150 por um corte. Mande AJUDA para ver mais exemplos."
 )
 TEXT_ONLY_REPLY = (
     "Por enquanto eu só entendo mensagens de texto. "
@@ -212,7 +213,26 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
         )
     settings = get_settings()
     pending, expired = clarification.current_pending(session, business, ctx.now)
-    if pending is not None:
+    if pending is not None and pending.kind == batch.BATCH:
+        confirmed = clarification.parse_confirmation(event.text)
+        if confirmed is clarification.CANCEL:
+            clarification.close(
+                pending, clarification.CANCELLED, ctx.now, resolution_message_id=event.external_id
+            )
+            return "Tudo bem, não anotei nenhum desses lançamentos."
+        if confirmed:
+            recorded = ledger.record_batch(pending, resolution_message_id=event.external_id)
+            clarification.close(
+                pending, clarification.RESOLVED, ctx.now, resolution_message_id=event.external_id
+            )
+            totals = {kind: 0 for kind in TransactionType}
+            for item in recorded:
+                totals[item.transaction_type] += item.amount_cents
+            return (
+                f"Pronto, anotei {len(recorded)} lançamentos. {batch.totals_line(totals)}\n\n"
+                "Se algo saiu errado, mande DESFAZER para desfazer todos eles."
+            )
+    elif pending is not None:
         answer = clarification.parse_answer(event.text, clarification.candidates_of(pending))
         if answer is clarification.CANCEL:
             clarification.close(
@@ -244,6 +264,8 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
     )
     if command is not None:
         return command.reply
+    if batch.is_batch_message(event.text, now=_aware(event.sent_at), tz=ledger.tz):
+        return _open_batch(session, business, event, ctx, pending)
     try:
         result = ledger.process(
             message_id=event.external_id,
@@ -275,6 +297,37 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
             return "Não entendi a resposta. " + clarification.question(pending)
         return ai_fallback(session, business, event, ctx) or NOT_UNDERSTOOD_REPLY
     return _confirmation(result.transaction, event.sent_at)
+
+
+def _open_batch(
+    session: Session,
+    business: Business,
+    event: InboundEvent,
+    ctx: JobContext,
+    pending,
+) -> str:
+    plan = batch.plan(event.text or "", now=_aware(event.sent_at), tz=get_business_timezone())
+    if plan.problems:
+        reply = batch.problems_reply(plan.problems)
+        if pending is not None:
+            reply += "\n\n" + clarification.question(pending)
+        return reply
+    new_pending = clarification.create_pending(
+        session,
+        business,
+        source_message_id=event.external_id,
+        source_text=event.text if event.message_type != "audio" else "",
+        amount_cents=sum(item.amount_cents for item in plan.items),
+        description=f"{len(plan.items)} lançamentos",
+        occurred_at=event.sent_at,
+        candidates=(),
+        origin="rules",
+        now=ctx.now,
+        ttl=timedelta(hours=get_settings().pending_entry_ttl_hours),
+        kind=batch.BATCH,
+        items=batch.serialize(plan.items),
+    )
+    return clarification.question(new_pending)
 
 
 def _confirmation(transaction: EffectiveTransaction, sent_at: datetime) -> str:

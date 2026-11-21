@@ -147,12 +147,20 @@ class ConversationService:
             if transaction is None:
                 reply = "Não encontrei um lançamento ativo para desfazer."
             else:
-                self.ledger.reverse(
-                    transaction.id,
-                    reason="Desfeito por comando no WhatsApp",
-                    commit=False,
-                )
-                reply = f"Lançamento de {format_brl(transaction.amount_cents)} desfeito."
+                # Entries recorded together from one message are undone together.
+                group = [transaction, *self.ledger.batch_siblings(transaction.id)]
+                for item in group:
+                    self.ledger.reverse(
+                        item.id, reason="Desfeito por comando no WhatsApp", commit=False
+                    )
+                if len(group) == 1:
+                    reply = f"Lançamento de {format_brl(transaction.amount_cents)} desfeito."
+                else:
+                    total = format_brl(sum(item.amount_cents for item in group))
+                    reply = (
+                        f"Desfiz os {len(group)} lançamentos da mesma mensagem "
+                        f"(soma de {total})."
+                    )
         elif match := _CORRECTION_RE.fullmatch(normalized):
             command_type = "correction"
             transaction_type = _TYPE_WORDS.get(match.group(1))

@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from lucromei import batch
+from lucromei.config import get_business_timezone
 from lucromei.domain import TransactionType
 from lucromei.models import Business, PendingEntry
 from lucromei.money import format_brl
@@ -60,6 +62,18 @@ _TYPE_ANSWERS = {
     },
 }
 _CONFIRM_ANSWERS = {"sim", "s", "confirmo", "isso", "isso mesmo", "pode anotar", "certo", "ok"}
+_BATCH_CONFIRM_ANSWERS = {
+    "sim pode",
+    "sim pode anotar",
+    "pode",
+    "anota",
+    "anotar",
+    "anota tudo",
+    "pode anotar tudo",
+    "confirmar",
+    "todos",
+    "sim todos",
+}
 _CANCEL_ANSWERS = {
     "cancelar",
     "cancela",
@@ -118,6 +132,8 @@ def create_pending(
     origin: str,
     now: datetime,
     ttl: timedelta,
+    kind: str = "single",
+    items: list[dict] | None = None,
 ) -> PendingEntry:
     """Open a new question, replacing the open one if any. Does not commit."""
 
@@ -137,6 +153,8 @@ def create_pending(
         occurred_at=occurred_at,
         candidate_types=[candidate.value for candidate in candidates],
         origin=origin,
+        kind=kind,
+        items=items,
         status=OPEN,
         created_at=now,
         expires_at=now + ttl,
@@ -180,6 +198,17 @@ def parse_answer(text: str, candidates: tuple[TransactionType, ...]):
     return None
 
 
+def parse_confirmation(text: str):
+    """For a batch preview: True for yes, CANCEL for no, None when it is not an answer."""
+
+    answer = _normalize(text).strip(" .!")
+    if answer in _CANCEL_ANSWERS:
+        return CANCEL
+    if answer in _CONFIRM_ANSWERS or answer in _BATCH_CONFIRM_ANSWERS:
+        return True
+    return None
+
+
 def looks_like_answer(text: str) -> bool:
     """Would this text have answered a question? Used to explain that a question expired."""
 
@@ -189,6 +218,9 @@ def looks_like_answer(text: str) -> bool:
 
 
 def question(pending: PendingEntry) -> str:
+    if pending.kind == batch.BATCH:
+        tz = get_business_timezone()
+        return batch.preview(pending, tz, _aware(pending.created_at).astimezone(tz).date())
     candidates = candidates_of(pending)
     amount = format_brl(pending.amount_cents)
     if len(candidates) == 1:

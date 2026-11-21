@@ -212,6 +212,71 @@ class LedgerService:
         self.session.flush()
         return effective_transaction(transaction)
 
+    def record_batch(
+        self, pending: PendingEntry, *, resolution_message_id: str
+    ) -> list[EffectiveTransaction]:
+        """Record every entry of a confirmed batch. Does not commit.
+
+        Entry n of message M gets the idempotency key "M#n", so a batch is recorded at most
+        once; the caller's single database transaction makes it all or nothing.
+        """
+        business = self.session.get(Business, pending.business_id)
+        if not onboarding.is_active(business):
+            raise onboarding.OnboardingRequired("O cadastro não está concluído.")
+        recorded = []
+        for index, item in enumerate(pending.items or [], 1):
+            external_id = f"{pending.source_message_id}#{index}"
+            if existing := self._find_message(external_id):
+                recorded.append(effective_transaction(existing.transaction))
+                continue
+            inbound = InboundMessage(
+                external_id=external_id, business_id=business.id, raw_text=pending.source_text
+            )
+            transaction = Transaction(
+                business_id=business.id,
+                source_message=inbound,
+                transaction_type=TransactionType(item["transaction_type"]).value,
+                amount_cents=int(item["amount_cents"]),
+                description=item["description"],
+                occurred_at=datetime.fromisoformat(item["occurred_at"]),
+            )
+            snapshot = dict(item)
+            snapshot.update(
+                pending_entry_id=pending.id,
+                confirmed_by_message_id=resolution_message_id,
+                origin=pending.origin,
+                batch_index=index,
+                batch_size=len(pending.items or []),
+            )
+            transaction.events.append(TransactionEvent(event_type="created", changes=snapshot))
+            self.session.add(transaction)
+            recorded.append(transaction)
+        self.session.flush()
+        return [
+            item if isinstance(item, EffectiveTransaction) else effective_transaction(item)
+            for item in recorded
+        ]
+
+    def batch_siblings(self, transaction_id: str) -> list[EffectiveTransaction]:
+        """The other active entries recorded from the same multi-entry message, if any."""
+        transaction = self._get_transaction(transaction_id)
+        source = self.session.get(InboundMessage, transaction.source_message_id)
+        base, separator, index = (source.external_id if source else "").rpartition("#")
+        if not separator or not index.isdigit():
+            return []
+        keys = [f"{base}#{n}" for n in range(1, 21)]  # batches hold at most 10
+        rows = self.session.scalars(
+            select(Transaction)
+            .join(InboundMessage, Transaction.source_message_id == InboundMessage.id)
+            .options(selectinload(Transaction.events))
+            .where(
+                InboundMessage.external_id.in_(keys),
+                Transaction.business_id == transaction.business_id,
+                Transaction.id != transaction.id,
+            )
+        ).all()
+        return [item for item in map(effective_transaction, rows) if not item.reversed]
+
     def correct(
         self,
         transaction_id: str,

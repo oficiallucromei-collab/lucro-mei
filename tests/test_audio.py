@@ -286,7 +286,7 @@ def test_decoded_ogg_duration_and_no_temp_files(tmp_path, monkeypatch):
         ("Gastei 80 reais em produtos.", "Despesa registrada: R$ 80,00", 1),
         ("Retirei 500 reais para mim.", "Retirada pessoal registrada: R$ 500,00", 1),
         ("Resumo do mês?", "Resumo", 0),
-        ("Recebi 200 reais e gastei 50 reais no transporte.", "uma operação por mensagem", 0),
+        ("Recebi 200 reais e gastei 50 reais no transporte.", "Vou anotar 2 lançamentos", 0),
     ],
 )
 def test_audio_reuses_processing_with_duplicate_delivery(
