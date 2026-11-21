@@ -7,6 +7,7 @@ from datetime import timedelta
 from sqlalchemy.orm import sessionmaker
 
 from lucromei.ai import MessageInterpreter, build_interpreter
+from lucromei.audio import AudioTranscriber
 from lucromei.config import Settings, get_settings
 from lucromei.jobs import JobContext, JobQueue, utc_now
 from lucromei.observability import (
@@ -15,7 +16,7 @@ from lucromei.observability import (
     init_sentry,
     new_correlation_id,
 )
-from lucromei.processing import DEAD_HOOKS, HANDLERS, enqueue_maintenance
+from lucromei.processing import DEAD_HOOKS, HANDLERS, TRANSCRIBE_AUDIO, enqueue_maintenance
 from lucromei.whatsapp import OutboundSender
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ def build_queue(session_factory: sessionmaker, settings: Settings) -> JobQueue:
         handlers=HANDLERS,
         dead_hooks=DEAD_HOOKS,
         lease=timedelta(seconds=settings.job_lease_seconds),
+        lock_during_run=frozenset({TRANSCRIBE_AUDIO}),
     )
 
 
@@ -41,6 +43,9 @@ class Worker:
         self.settings = settings or get_settings()
         self.queue = build_queue(session_factory, self.settings)
         self.sender = sender
+        self.transcriber = (
+            AudioTranscriber(self.settings) if self.settings.whatsapp_audio_enabled else None
+        )
         self.interpreter = interpreter if interpreter is not None else build_interpreter(
             self.settings
         )
@@ -54,6 +59,7 @@ class Worker:
             now=utc_now(),
             services={
                 "sender": self.sender,
+                "transcriber": self.transcriber,
                 "interpreter": self.interpreter,
                 "max_attempts": self.settings.job_max_attempts,
             },

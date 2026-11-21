@@ -12,6 +12,7 @@ from lucromei.config import is_configured_secret
 from lucromei.money import format_brl
 
 logger = logging.getLogger(__name__)
+MEDIA_ID_RE = re.compile(r"[0-9]{1,64}")
 
 
 class InvalidWebhookSignature(ValueError):
@@ -39,6 +40,8 @@ class WhatsAppInboundMessage:
     message_type: str
     text: str | None
     sent_at: datetime | None
+    media_id: str | None = None
+    phone_number_id: str | None = None
 
 
 class OutboundSender(Protocol):
@@ -79,8 +82,7 @@ def verify_signature(body: bytes, signature_header: str | None, app_secret: str)
 def extract_inbound_messages(payload: dict[str, Any]) -> list[WhatsAppInboundMessage]:
     """Normalize the user messages in a webhook payload; delivery statuses are not included.
 
-    Non-text messages (audio, images, stickers) are kept with `text=None` so the user can be
-    told that only text is understood for now.
+    Audio messages carry only a validated media ID. Other media keep `text=None`.
     """
 
     normalized: list[WhatsAppInboundMessage] = []
@@ -99,6 +101,12 @@ def extract_inbound_messages(payload: dict[str, Any]) -> list[WhatsAppInboundMes
                 text = body if _is_str(body) and body.strip() else None
                 if text is None:
                     continue
+            audio = message.get("audio")
+            media_id = (
+                audio.get("id") if message_type == "audio" and isinstance(audio, dict) else None
+            )
+            metadata = value.get("metadata")
+            phone_id = metadata.get("phone_number_id") if isinstance(metadata, dict) else None
             normalized.append(
                 WhatsAppInboundMessage(
                     message_id=message_id,
@@ -106,6 +114,10 @@ def extract_inbound_messages(payload: dict[str, Any]) -> list[WhatsAppInboundMes
                     message_type=message_type[:32],
                     text=text,
                     sent_at=_parse_timestamp(message.get("timestamp")),
+                    media_id=media_id if isinstance(media_id, str) and MEDIA_ID_RE.fullmatch(
+                        media_id
+                    ) else None,
+                    phone_number_id=phone_id if isinstance(phone_id, str) else None,
                 )
             )
     return normalized
