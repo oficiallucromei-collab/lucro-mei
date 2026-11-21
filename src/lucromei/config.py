@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     webhook_requests_per_minute: int = Field(default=600, ge=1)
     webhook_invalid_signatures_per_minute: int = Field(default=20, ge=1)
     webhook_max_body_bytes: int = Field(default=256 * 1024, ge=1024)
+    # Rows per table per retention batch; a backlog is worked through in several short jobs.
+    retention_batch_size: int = Field(default=2000, ge=1)
     # Background worker that processes received messages and sends replies. "embedded" runs it
     # inside the web process; "off" leaves it to `python -m lucromei.worker`.
     worker_mode: str = "embedded"

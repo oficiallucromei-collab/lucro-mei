@@ -121,6 +121,11 @@ python -m lucromei.worker          # keeps running
 python -m lucromei.worker --once   # drains due jobs and exits
 ```
 
+Several workers (embedded in several Cloud Run instances, or the optional private worker
+service in `terraform/worker.tf`) can run at once: jobs are claimed with `SKIP LOCKED`, leases
+expire, maintenance is deduplicated per interval and retention runs as a series of bounded
+batches (`LUCROMEI_RETENTION_BATCH_SIZE`, 2000 rows per table per run).
+
 Jobs that fail are retried with exponential backoff (5s, 10s, 20s, … capped at 15 min) up to
 `LUCROMEI_JOB_MAX_ATTEMPTS`, then marked `dead` and kept for inspection. Replies are sent at
 least once: if the process dies right after WhatsApp accepts a message and before the database

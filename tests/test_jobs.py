@@ -313,6 +313,11 @@ def test_failed_message_does_not_block_later_messages() -> None:
 def test_embedded_worker_processes_webhook_in_background() -> None:
     get_settings().worker_poll_seconds = 30  # only the wake-up can make this test fast
     background = Worker(TestingSession, app.state.whatsapp_sender, get_settings())
+    # Skip the startup maintenance and health query: in SQLite the test thread and the worker
+    # share one connection, and the extra traffic made this test flaky.
+    now = time.time()
+    background._maintenance_bucket = int(now) // get_settings().maintenance_interval_seconds
+    background._health_bucket = int(now) // 60
     background.start()
     app.state.worker = background
     try:

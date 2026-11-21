@@ -72,3 +72,21 @@ variable "sentry_enabled" {
   type        = bool
   default     = false
 }
+
+variable "max_instances" {
+  description = "Maximum instances of the public service. The job queue and maintenance are safe with several; the webhook rate limits are per instance."
+  type        = number
+  default     = 1
+}
+
+variable "separate_worker" {
+  description = "Run the job queue in a private always-on service (worker.tf, about US$ 50-70/month) instead of inside the public service."
+  type        = bool
+  default     = false
+}
+
+variable "worker_instances" {
+  description = "Maximum instances of the separate worker."
+  type        = number
+  default     = 1
+}
