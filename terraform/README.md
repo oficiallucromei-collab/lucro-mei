@@ -8,6 +8,8 @@ This configuration manages project `lucro-mei` in `southamerica-east1`. It cover
 - the Secret Manager entries and their runtime grants;
 - the public `lucromei-test` Cloud Run service;
 - the `lucromei-migrate` Cloud Run job;
+- the `lucromei-ops` Cloud Run job (operator tools, `python -m lucromei.ops`, runtime
+  database role; billed only while it runs);
 - the private bucket that stages release source;
 - the deploy grants for `lucromei-build` and the push-to-main release trigger.
 
