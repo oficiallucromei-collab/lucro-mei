@@ -39,8 +39,8 @@ locals {
   operator_roles = toset([
     "roles/artifactregistry.admin",
     "roles/cloudbuild.builds.editor",
-    "roles/cloudbuild.connectionViewer",
-    "roles/iam.securityReviewer", # read IAM policies, so plans of this file work
+    "roles/cloudbuild.connectionAdmin", # create the GitHub connection and repository link
+    "roles/iam.securityReviewer",       # read IAM policies, so plans of this file work
     "roles/iam.serviceAccountCreator",
     "roles/iam.serviceAccountUser",
     "roles/logging.logWriter",

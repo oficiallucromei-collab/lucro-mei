@@ -1,30 +1,34 @@
 # Runs cloudbuild.yaml (test, build, smoke test, push, migrate, deploy) on every push to main.
-#
-# The GitHub connection is created outside Terraform because it needs an interactive GitHub
-# authorization; see README. Set release_trigger_enabled = true once it exists.
 
-variable "release_trigger_enabled" {
-  description = "Create the push-to-main release trigger. Needs the lucromei-github connection."
-  type        = bool
-  default     = false
-}
+# Created by hand once (the GitHub authorization is interactive) and imported; see README.
+# Cloud Build's service agent created the OAuth token secret and keeps it up to date.
+resource "google_cloudbuildv2_connection" "github" {
+  name     = "lucromei-github"
+  location = local.region
 
-locals {
-  github_connection = "projects/${local.project_id}/locations/${local.region}/connections/lucromei-github"
+  github_config {
+    app_installation_id = 183528323
+
+    authorizer_credential {
+      oauth_token_secret_version = "projects/lucro-mei/locations/southamerica-east1/secrets/lucromei-github-github-oauthtoken-af8e8a/versions/latest"
+    }
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [google_project_iam_member.cloudbuild_agent_secret_admin]
 }
 
 resource "google_cloudbuildv2_repository" "app" {
-  count = var.release_trigger_enabled ? 1 : 0
-
   name              = "lucro-mei"
   location          = local.region
-  parent_connection = local.github_connection
+  parent_connection = google_cloudbuildv2_connection.github.name
   remote_uri        = "https://github.com/oficiallucromei-collab/lucro-mei.git"
 }
 
 resource "google_cloudbuild_trigger" "release" {
-  count = var.release_trigger_enabled ? 1 : 0
-
   name            = "lucromei-release"
   location        = local.region
   description     = "Test, build and deploy lucromei-test from main"
@@ -32,7 +36,7 @@ resource "google_cloudbuild_trigger" "release" {
   service_account = google_service_account.build.id
 
   repository_event_config {
-    repository = google_cloudbuildv2_repository.app[0].id
+    repository = google_cloudbuildv2_repository.app.id
 
     push {
       branch = "^main$"

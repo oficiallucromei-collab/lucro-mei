@@ -48,3 +48,8 @@ import {
   to = google_project_iam_member.operator[each.key]
   id = "${local.project_id} ${each.key} ${local.operator}"
 }
+
+import {
+  to = google_cloudbuildv2_connection.github
+  id = "projects/${local.project_id}/locations/${local.region}/connections/lucromei-github"
+}

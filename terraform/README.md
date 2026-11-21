@@ -20,7 +20,7 @@ or rotate a payload, add a version directly in Secret Manager, then update the
 version number in `local.pinned_secret_versions` in `main.tf`. To change it for
 one plan only, use `-var='secret_versions={...}'`.
 
-Neon, Meta and the GitHub connection are operated outside Terraform.
+Neon and Meta are operated outside Terraform.
 
 ## State and access
 
@@ -80,26 +80,35 @@ The pipeline owns the image of the service and the job. Terraform ignores their
 
 ### Push-to-main trigger
 
-The `lucromei-release` trigger runs the pipeline on every push to `main`. It needs a
-Cloud Build connection to GitHub, which is set up once by hand:
+The `lucromei-release` trigger runs the pipeline on every push to `main`. `trigger.tf`
+tracks the trigger and the `lucro-mei` repository link. It also tracks the
+`lucromei-github` connection, which uses the Google Cloud Build GitHub App
+(installation `183528323`) on `oficiallucromei-collab`.
 
-1. Apply `iam.tf` (the `secretmanager.admin` grant for the Cloud Build service agent).
-2. Create the connection. Open the link it prints, authorize, and install the Google
-   Cloud Build GitHub App on `oficiallucromei-collab/lucro-mei`:
+The connection was created by hand and then imported, because the GitHub
+authorization is interactive. Its OAuth token lives in the Secret Manager secret
+`lucromei-github-github-oauthtoken-af8e8a`. Cloud Build's service agent created that
+secret and keeps it current, so Terraform does not manage it.
+
+If the connection ever has to be recreated, `prevent_destroy` must be lifted first.
+Then:
+
+1. Create it and authorize GitHub through the link it prints:
 
    ```bash
    gcloud builds connections create github lucromei-github \
      --project=lucro-mei --region=southamerica-east1
    ```
 
-3. Check that `installationState.stage` is `COMPLETE`:
+2. Check that `installationState.stage` is `COMPLETE`, and note the new
+   `appInstallationId` and `oauthTokenSecretVersion`:
 
    ```bash
    gcloud builds connections describe lucromei-github \
      --project=lucro-mei --region=southamerica-east1
    ```
 
-4. Set `release_trigger_enabled` to `true` in `trigger.tf`, then plan and apply.
+3. Update both values in `trigger.tf`, then plan and apply.
 
 ### Run the pipeline by hand
 
