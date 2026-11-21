@@ -1,0 +1,59 @@
+# Promote the release running in lucromei-test to lucromei-prod. Nothing is rebuilt: the same
+# image digest that passed tests, the smoke test and the test environment is migrated and
+# deployed. Started by the lucromei-promote trigger (terraform/prod), which waits for a manual
+# approval in the Cloud Build console. Pass _IMAGE to promote a specific earlier digest.
+serviceAccount: projects/lucro-mei/serviceAccounts/lucromei-build@lucro-mei.iam.gserviceaccount.com
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s
+
+substitutions:
+  _REGION: southamerica-east1
+  _SOURCE_SERVICE: lucromei-test
+  _SERVICE: lucromei-prod
+  _MIGRATE_JOB: lucromei-prod-migrate
+  _OPS_JOB: lucromei-prod-ops
+  _IMAGE: ""
+
+steps:
+  - id: resolve-image
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -euc
+      - |
+        image="$_IMAGE"
+        if [[ -z "$$image" ]]; then
+          image="$$(gcloud run services describe $_SOURCE_SERVICE --region=$_REGION \
+            --format='value(spec.template.spec.containers[0].image)')"
+        fi
+        [[ "$$image" =~ ^southamerica-east1-docker[.]pkg[.]dev/lucro-mei/lucromei/lucromei@sha256:[a-f0-9]{64}$$ ]]
+        echo "$$image" > /workspace/image
+        echo "Promoting $$image"
+
+  - id: migrate-production
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -euc
+      - |
+        image="$$(cat /workspace/image)"
+        gcloud run jobs update $_MIGRATE_JOB --region=$_REGION --image="$$image" --quiet
+        gcloud run jobs execute $_MIGRATE_JOB --region=$_REGION --wait
+
+  - id: deploy-production
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -euc
+      - |
+        image="$$(cat /workspace/image)"
+        gcloud run services update $_SERVICE --region=$_REGION --image="$$image" --quiet
+        gcloud run jobs update $_OPS_JOB --region=$_REGION --image="$$image" --quiet
+        url="$$(gcloud run services describe $_SERVICE --region=$_REGION --format='value(status.url)')"
+        for attempt in 1 2 3 4 5; do
+          curl -fsS "$$url/health" && exit 0
+          sleep 5
+        done
+        echo "Health check failed for $$url" >&2
+        exit 1
