@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from lucromei.ai import MessageInterpreter, build_interpreter
 from lucromei.audio import AudioTranscriber
 from lucromei.config import Settings, get_settings
-from lucromei.jobs import JobContext, JobQueue, utc_now
+from lucromei.jobs import JobContext, JobQueue, queue_health, utc_now
 from lucromei.observability import (
     configure_logging,
     correlation_id,
@@ -20,6 +20,7 @@ from lucromei.processing import DEAD_HOOKS, HANDLERS, TRANSCRIBE_AUDIO, enqueue_
 from lucromei.whatsapp import OutboundSender
 
 logger = logging.getLogger(__name__)
+HEALTH_INTERVAL_SECONDS = 60
 
 
 def build_queue(session_factory: sessionmaker, settings: Settings) -> JobQueue:
@@ -53,6 +54,7 @@ class Worker:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._maintenance_bucket: int | None = None
+        self._health_bucket: int | None = None
 
     def context(self) -> JobContext:
         return JobContext(
@@ -69,7 +71,26 @@ class Worker:
         """Claim and run one batch of due jobs. Returns how many were claimed."""
         context = self.context()
         self.schedule_maintenance(context.now)
+        self.report_queue_health(context.now)
         return self.queue.run_due(context, limit=self.settings.worker_batch_size)
+
+    def report_queue_health(self, now) -> None:
+        """Log the queue's lag once a minute per worker; alerts are built on this event."""
+        bucket = int(now.timestamp()) // HEALTH_INTERVAL_SECONDS
+        if bucket == self._health_bucket:
+            return
+        self._health_bucket = bucket
+        # Measured before this batch is claimed: a busy queue shows its real lag.
+        with self.queue.session_factory() as session:
+            health = queue_health(session, now, dead_since=now - timedelta(hours=1))
+        logger.info(
+            "queue_health",
+            extra={
+                "due_jobs": health.due_jobs,
+                "oldest_due_seconds": health.oldest_due_seconds,
+                "dead_jobs": health.dead_jobs,
+            },
+        )
 
     def schedule_maintenance(self, now) -> None:
         """Enqueue the periodic maintenance job (deduplicated per interval across workers)."""

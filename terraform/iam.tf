@@ -43,8 +43,10 @@ locals {
     "roles/iam.securityReviewer",       # read IAM policies, so plans of this file work
     "roles/iam.serviceAccountCreator",
     "roles/iam.serviceAccountUser",
+    "roles/logging.configWriter", # log-based metrics (monitoring.tf)
     "roles/logging.logWriter",
     "roles/logging.viewer",
+    "roles/monitoring.editor", # alert policies, uptime check, notification channel
     "roles/run.admin",
     "roles/secretmanager.admin",
     "roles/serviceusage.serviceUsageConsumer",

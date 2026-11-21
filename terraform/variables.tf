@@ -22,6 +22,7 @@ variable "secret_versions" {
         "LUCROMEI_INTERNAL_API_KEY",
         "LUCROMEI_MIGRATE_DATABASE_URL",
         "LUCROMEI_PRIVACY_HASH_KEY",
+        "LUCROMEI_SENTRY_DSN",
         "LUCROMEI_WHATSAPP_ACCESS_TOKEN",
         "LUCROMEI_WHATSAPP_APP_SECRET",
         "LUCROMEI_WHATSAPP_VERIFY_TOKEN",
@@ -50,6 +51,24 @@ variable "contact_email" {
 
 variable "notifications_enabled" {
   description = "Send proactive notices (end of trial). Turn on only after the Meta templates are approved."
+  type        = bool
+  default     = false
+}
+
+variable "monitoring_enabled" {
+  description = "Create the log metrics, uptime check and alert policies in monitoring.tf. Needs the monitoring roles in iam.tf granted first."
+  type        = bool
+  default     = false
+}
+
+variable "alert_email" {
+  description = "Where Cloud Monitoring sends alerts."
+  type        = string
+  default     = "oficiallucromei@gmail.com"
+}
+
+variable "sentry_enabled" {
+  description = "Send errors to Sentry. Add the DSN to the lucromei-sentry-dsn secret first (scripts/set-secret.sh)."
   type        = bool
   default     = false
 }

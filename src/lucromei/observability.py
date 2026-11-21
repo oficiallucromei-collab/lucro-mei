@@ -30,6 +30,8 @@ SAFE_FIELDS = frozenset(
         "attempts",
         "audio_duration_ms",
         "business_id",
+        "dead_jobs",
+        "due_jobs",
         "duplicates",
         "duration_ms",
         "error",
@@ -37,12 +39,20 @@ SAFE_FIELDS = frozenset(
         "job_kind",
         "latency_ms",
         "method",
+        "oldest_due_seconds",
         "outcome",
         "path",
         "status_code",
         "statuses",
     }
 )
+_SEVERITY = {
+    "DEBUG": "DEBUG",
+    "INFO": "INFO",
+    "WARNING": "WARNING",
+    "ERROR": "ERROR",
+    "CRITICAL": "CRITICAL",
+}
 _CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,64}$")
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error")
 
@@ -64,6 +74,8 @@ class JsonFormatter(logging.Formatter):
         entry: dict[str, Any] = {
             "ts": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
+            # Cloud Logging reads "severity" from JSON lines; alerts filter on it.
+            "severity": _SEVERITY.get(record.levelname, "DEFAULT"),
             "logger": record.name,
             # Event names only: the message is the format string, never interpolated arguments.
             "event": str(record.msg)[:200],
