@@ -35,7 +35,14 @@ This initial scaffold includes:
 - background processing: the webhook only validates, records the message once (its Meta ID is
   the idempotency key) and answers 200; a PostgreSQL job queue (`SELECT ... FOR UPDATE SKIP
   LOCKED`) then processes it and sends the reply, with bounded retries and exponential backoff;
-- idempotent WhatsApp commands for undo, corrections, and monthly summaries;
+- idempotent WhatsApp commands for undo, corrections, summaries of today, yesterday, this or
+  last week (Monday to Sunday) and this or last month ("quanto ganhei essa semana?", "resumo
+  de hoje"), the last 10 entries ("últimos lançamentos") and help ("ajuda"); periods follow
+  the local calendar of the moment the message was sent;
+- backdated entries: "ontem recebi 200", "anteontem", "dia 15", "15/11" or "15/11/2026" move
+  the entry to noon of that local day; future dates, impossible dates and dates older than a
+  year are refused with an explicit reply; "desfazer" undoes the entry recorded last, whatever
+  its date;
 - clarification instead of rejection: an ambiguous message ("Paguei 300 para o fornecedor") is
   kept as a pending entry and the user is asked whether it is a business expense or a personal
   withdrawal; the transaction is recorded only after the answer, and questions expire after
@@ -136,9 +143,8 @@ decodificado, mede a duração e gera um WAV mono em memória. A transcrição e
 é gravada junto com o próximo job, que executa as mesmas regras, confirmações, comandos e
 controles de acesso das mensagens digitadas.
 
-O fluxo atual aceita **uma operação por mensagem** e tem consultas de resumo mensal, como
-“Resumo do mês”. A pergunta “Quanto eu ganhei essa semana?” e os lançamentos em lote
-dependem de evoluções do fluxo compartilhado. Para lotes, a próxima etapa é criar uma
+As transcrições passam pelo mesmo fluxo do texto, incluindo datas passadas (“ontem recebi
+200”) e os resumos do dia, da semana e do mês (“Quanto eu ganhei essa semana?”). Para lotes, a próxima etapa é criar uma
 prévia com todas as operações, pedir confirmação explícita e gravar o lote em uma única
 transação do banco, com idempotência vinculada à mensagem de origem.
 

@@ -2,7 +2,7 @@ import hmac
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from typing import Any, Protocol
 
@@ -147,10 +147,16 @@ def _parse_timestamp(raw: Any) -> datetime | None:
         return None
 
 
-def format_confirmation(transaction_type: str, amount_cents: int) -> str:
+def format_confirmation(
+    transaction_type: str, amount_cents: int, *, occurred_on: date | None = None
+) -> str:
     amount = format_brl(amount_cents)
     labels = {"income": "Entrada", "expense": "Despesa", "withdrawal": "Retirada pessoal"}
-    return f"{labels[transaction_type]} registrada: {amount}. Responda 'desfazer' para corrigir."
+    when = f" em {occurred_on.strftime('%d/%m/%Y')}" if occurred_on else ""
+    return (
+        f"{labels[transaction_type]} registrada{when}: {amount}. "
+        "Responda 'desfazer' para corrigir."
+    )
 
 
 # Meta error codes worth retrying: throttling and temporary platform errors. Everything else in a
