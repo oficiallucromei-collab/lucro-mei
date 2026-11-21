@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ""
     whatsapp_graph_api_version: str = "v25.0"
     whatsapp_timeout_seconds: float = 10.0
+    whatsapp_audio_enabled: bool = False
+    whatsapp_audio_max_duration_seconds: int = Field(default=60, ge=1, le=60)
+    whatsapp_audio_max_size_bytes: int = Field(default=4 * 1024 * 1024, ge=1, le=16 * 1024 * 1024)
+    openai_api_key: str = Field(default="", repr=False)
+    openai_transcription_model: str = "gpt-4o-mini-transcribe"
+    openai_transcription_timeout_seconds: float = Field(default=25.0, gt=0, le=60)
     # Terms of use shown during onboarding. Bump the version whenever the text changes.
     terms_version: str = "2026-11-20"
     terms_url: str = ""

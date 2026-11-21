@@ -104,11 +104,13 @@ class LedgerService:
         text: str,
         occurred_at: datetime | None = None,
         commit: bool = True,
+        retain_source_text: bool = True,
     ) -> ProcessedMessage:
         """Record the transaction described by a message, once per message ID.
 
         With commit=False the caller owns the transaction: nothing is committed and a concurrent
         insert of the same message ID surfaces as IntegrityError for the caller to retry.
+        The caller can keep the source text solely in the expiring inbox.
         """
         if existing := self._find_message(message_id):
             return self._processed(existing, whatsapp_number, duplicate=True)
@@ -122,7 +124,7 @@ class LedgerService:
         inbound = InboundMessage(
             external_id=message_id,
             business_id=business.id,
-            raw_text=text,
+            raw_text=text if retain_source_text else "",
         )
         transaction = Transaction(
             business_id=business.id,

@@ -28,6 +28,7 @@ SAFE_FIELDS = frozenset(
     {
         "accepted",
         "attempts",
+        "audio_duration_ms",
         "business_id",
         "duplicates",
         "duration_ms",
@@ -104,6 +105,9 @@ def configure_logging(level: str = "INFO") -> None:
             root.removeHandler(existing)
         root.addHandler(handler)
     root.setLevel(level.upper())
+    # HTTP library messages can embed signed media URLs, including in their format strings.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.CRITICAL + 1)
     for name in _UVICORN_LOGGERS:
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers.clear()
@@ -170,6 +174,7 @@ def init_sentry(dsn: str, *, environment: str, traces_sample_rate: float = 0.0) 
     if not dsn:
         return False
     import sentry_sdk
+    from sentry_sdk.integrations.httpx import HttpxIntegration
 
     sentry_sdk.init(
         dsn=dsn,
@@ -180,5 +185,6 @@ def init_sentry(dsn: str, *, environment: str, traces_sample_rate: float = 0.0) 
         traces_sample_rate=traces_sample_rate,
         before_send=scrub_event,
         before_breadcrumb=scrub_breadcrumb,
+        disabled_integrations=[HttpxIntegration],
     )
     return True

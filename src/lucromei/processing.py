@@ -17,10 +17,11 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from lucromei import ai, clarification, onboarding, privacy
+from lucromei.audio import AudioError
 from lucromei.config import get_settings
 from lucromei.conversation import ConversationService
 from lucromei.domain import AmbiguousTransaction, ParseError
-from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, insert_ignore
+from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, insert_ignore, utc_now
 from lucromei.models import (
     AIUsage,
     Business,
@@ -40,6 +41,14 @@ from lucromei.whatsapp import (
 logger = logging.getLogger(__name__)
 
 PROCESS_MESSAGE = "process_message"
+TRANSCRIBE_AUDIO = "transcribe_audio"
+AUDIO_CLARIFY_REPLY = (
+    "Não consegui entender seu áudio. Pode tentar novamente ou enviar a informação por texto?"
+)
+AUDIO_ONBOARDING_REPLY = "Conclua o cadastro por texto para poder enviar áudios."
+AUDIO_SIZE_REPLY = "Seu áudio ficou muito grande. Envie um áudio menor ou uma mensagem de texto."
+AUDIO_FORMAT_REPLY = "Esse formato de áudio não é compatível. Grave um áudio pelo WhatsApp."
+AUDIO_ATTEMPTS = 3
 SEND_MESSAGE = "send_message"
 MAINTENANCE = "maintenance"
 DELETE_ACCOUNT = "delete_account"
@@ -63,6 +72,91 @@ def enqueue_inbound_processing(session: Session, external_id: str, *, max_attemp
         dedupe_key=f"{PROCESS_MESSAGE}:{external_id}",
         max_attempts=max_attempts,
     )
+
+
+def enqueue_audio_transcription(session: Session, external_id: str) -> None:
+    enqueue(
+        session,
+        TRANSCRIBE_AUDIO,
+        {"external_id": external_id},
+        dedupe_key=f"{TRANSCRIBE_AUDIO}:{external_id}",
+        max_attempts=AUDIO_ATTEMPTS,
+    )
+
+
+def handle_audio_transcription(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
+    event = session.scalar(
+        select(InboundEvent)
+        .where(InboundEvent.external_id == payload["external_id"])
+        .with_for_update()
+    )
+    if event is None or event.status != "received" or event.text is not None:
+        return
+    if _has_earlier_pending_message(session, event):
+        raise RetryLater(ORDERING_RETRY_SECONDS)
+
+    transcriber = ctx.services.get("transcriber")
+    if transcriber is None:
+        _reply_to_audio_failure(session, event, TEXT_ONLY_REPLY, ctx.now)
+        return
+    business = session.scalar(select(Business).where(Business.whatsapp_number == event.sender))
+    if not onboarding.is_active(business):
+        _reply_to_audio_failure(session, event, AUDIO_ONBOARDING_REPLY, ctx.now)
+        return
+
+    try:
+        if event.media_id is None:
+            raise AudioError("missing_media_id")
+        result = transcriber.transcribe(event.media_id)
+    except AudioError as exc:
+        logger.warning("audio_processing_failed", extra={"error": exc.code})
+        if exc.retryable:
+            raise
+        reply = {
+            "audio_too_large": AUDIO_SIZE_REPLY,
+            "unsupported_audio": AUDIO_FORMAT_REPLY,
+        }.get(exc.code, AUDIO_CLARIFY_REPLY)
+        if exc.code == "audio_too_long":
+            limit = get_settings().whatsapp_audio_max_duration_seconds
+            unit = "segundo" if limit == 1 else "segundos"
+            reply = (
+                "Seu áudio ficou um pouco longo. "
+                f"Envie um áudio de até {limit} {unit}, por favor."
+            )
+        _reply_to_audio_failure(session, event, reply, ctx.now)
+        return
+
+    event.text = result.text
+    event.media_id = None
+    enqueue_inbound_processing(
+        session, event.external_id, max_attempts=ctx.services["max_attempts"]
+    )
+
+
+def _reply_to_audio_failure(
+    session: Session, event: InboundEvent, reply: str, now: datetime
+) -> None:
+    event.media_id = None
+    event.status = "failed"
+    event.processed_at = now
+    queue_reply(
+        session,
+        recipient=event.sender,
+        in_reply_to=event.external_id,
+        text=reply,
+        max_attempts=get_settings().job_max_attempts,
+        now=now,
+    )
+
+
+def mark_audio_failed(session: Session, payload: dict[str, Any], error: str) -> None:
+    event = session.scalar(
+        select(InboundEvent)
+        .where(InboundEvent.external_id == payload["external_id"])
+        .with_for_update()
+    )
+    if event is not None and event.status == "received":
+        _reply_to_audio_failure(session, event, AUDIO_CLARIFY_REPLY, utc_now())
 
 
 def handle_process_message(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
@@ -156,13 +250,14 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
             text=event.text,
             occurred_at=event.sent_at,
             commit=False,
+            retain_source_text=event.message_type != "audio",
         )
     except AmbiguousTransaction as ambiguity:
         new_pending = clarification.create_pending(
             session,
             business,
             source_message_id=event.external_id,
-            source_text=event.text,
+            source_text=event.text if event.message_type != "audio" else "",
             amount_cents=ambiguity.amount_cents,
             description=ambiguity.description,
             occurred_at=event.sent_at,
@@ -233,7 +328,7 @@ def ai_fallback(
         session,
         business,
         source_message_id=event.external_id,
-        source_text=text,
+        source_text=text if event.message_type != "audio" else "",
         amount_cents=result.suggestion.amount_cents,
         description=_description_from_user_text(text),
         occurred_at=event.sent_at,
@@ -366,7 +461,10 @@ def mark_event_failed(session: Session, payload: dict[str, Any], error: str) -> 
         select(InboundEvent).where(InboundEvent.external_id == payload.get("external_id"))
     )
     if event is not None and event.status == "received":
-        event.status = "failed"
+        if event.message_type == "audio":
+            _reply_to_audio_failure(session, event, AUDIO_CLARIFY_REPLY, utc_now())
+        else:
+            event.status = "failed"
 
 
 def mark_outbound_failed(session: Session, payload: dict[str, Any], error: str) -> None:
@@ -379,11 +477,16 @@ def mark_outbound_failed(session: Session, payload: dict[str, Any], error: str) 
 
 HANDLERS = {
     PROCESS_MESSAGE: handle_process_message,
+    TRANSCRIBE_AUDIO: handle_audio_transcription,
     SEND_MESSAGE: handle_send_message,
     MAINTENANCE: handle_maintenance,
     DELETE_ACCOUNT: handle_delete_account,
 }
-DEAD_HOOKS = {PROCESS_MESSAGE: mark_event_failed, SEND_MESSAGE: mark_outbound_failed}
+DEAD_HOOKS = {
+    PROCESS_MESSAGE: mark_event_failed,
+    TRANSCRIBE_AUDIO: mark_audio_failed,
+    SEND_MESSAGE: mark_outbound_failed,
+}
 
 
 def _has_earlier_pending_message(session: Session, event: InboundEvent) -> bool:

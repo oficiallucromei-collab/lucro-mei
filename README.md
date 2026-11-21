@@ -123,3 +123,81 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
 
 1. Subscription portal and billing (the trial is recorded, not yet enforced).
 
+
+## Áudios recebidos pelo WhatsApp
+
+O webhook assinado da Cloud API registra o ID da mensagem e enfileira a transcrição no
+PostgreSQL. O worker usa o número de destino configurado para resolver e baixar a mídia e
+só envia áudio à OpenAI de remetentes com cadastro concluído. O FFmpeg valida o áudio
+decodificado, mede a duração e gera um WAV mono em memória. A transcrição em português
+é gravada junto com o próximo job, que executa as mesmas regras, confirmações, comandos e
+controles de acesso das mensagens digitadas.
+
+O fluxo atual aceita **uma operação por mensagem** e tem consultas de resumo mensal, como
+“Resumo do mês”. A pergunta “Quanto eu ganhei essa semana?” e os lançamentos em lote
+dependem de evoluções do fluxo compartilhado. Para lotes, a próxima etapa é criar uma
+prévia com todas as operações, pedir confirmação explícita e gravar o lote em uma única
+transação do banco, com idempotência vinculada à mensagem de origem.
+
+### Configuração
+
+| Variável | Padrão | Uso |
+| --- | --- | --- |
+| `LUCROMEI_WHATSAPP_AUDIO_ENABLED` | `false` | Ativa o recebimento de voz no webhook e no worker. |
+| `LUCROMEI_WHATSAPP_AUDIO_MAX_DURATION_SECONDS` | `60` | Limite de duração de 1 a 60 segundos. |
+| `LUCROMEI_WHATSAPP_AUDIO_MAX_SIZE_BYTES` | `4194304` | Limite de download, configurável até 16 MiB. |
+| `LUCROMEI_OPENAI_API_KEY` | vazio | Injete a chave pelo Secret Manager ou equivalente. |
+| `LUCROMEI_OPENAI_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | Aceita a família `gpt-4o-mini-transcribe` ou `gpt-4o-transcribe`, incluindo versões com logprobs. |
+| `LUCROMEI_OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS` | `25` | Tempo total permitido por chamada à OpenAI. |
+| `LUCROMEI_WHATSAPP_TIMEOUT_SECONDS` | `10` | Tempo total para resolver e baixar a mídia. |
+| `LUCROMEI_MESSAGE_TEXT_RETENTION_DAYS` | `90` | Retenção existente, aplicada também às transcrições. |
+
+O serviço aceita OGG/Opus e os tipos MPEG, MP4, AAC e AMR. Áudio vazio, trechos marcados
+como inaudíveis ou scores de confiança baixos geram um pedido para repetir ou digitar a
+mensagem. A confiança da transcrição é uma estimativa. O valor reconhecido passa pelas
+validações financeiras existentes. Nenhum arquivo de áudio é escrito em disco. O ID de
+mídia sai da linha ao concluir a transcrição ou ao encerrar a tentativa. O fluxo de
+exclusão da conta também apaga a linha da mensagem e os dados vinculados. A transcrição
+integral fica na caixa de entrada com a retenção configurada. A descrição financeira
+extraída pelo fluxo existente continua no livro-caixa.
+
+### Implantação e verificação
+
+1. Em homologação, aplique `alembic upgrade head` antes de iniciar o novo serviço e os
+   workers. A imagem inclui FFmpeg. Em instalações fora da imagem, instale o executável
+   `ffmpeg` no `PATH`.
+2. Configure o número do WhatsApp, a versão do Graph, o segredo do webhook e o token Meta
+   com acesso às mídias do número. Injete a chave OpenAI pelo gerenciador de segredos.
+   Verifique a política de privacidade vigente e o tratamento por fornecedores antes de
+   habilitar a flag. [Controles de dados da OpenAI](https://developers.openai.com/api/docs/guides/your-data)
+3. Habilite a flag no webhook e nos workers. Com o worker embutido no Cloud Run, mantenha
+   CPU disponível fora das requisições. Confirme que o webhook responde antes do
+   processamento.
+4. Depois de concluir o cadastro de teste, envie um áudio OGG/Opus com uma receita, uma
+   despesa ou uma retirada. Confira a confirmação em português e o valor persistido.
+   Envie “Resumo do mês”, um áudio pouco inteligível e um acima do limite configurado.
+   Reentregue um webhook de teste com o mesmo ID e confira que há um único lançamento.
+5. Monitore os eventos `audio_transcription_request` (volume, duração em
+   `audio_duration_ms`, latência e resultado) e `audio_processing_failed` (código).
+   Falhas transitórias têm até três tentativas na fila, com nova resolução da URL a cada
+   tentativa. Se o job esgotar as tentativas, a fila registra o erro e pede um novo áudio
+   ou texto ao remetente. Para interromper o recurso, desabilite a flag no webhook e nos
+   workers. Mensagens já transcritas podem terminar pelo fluxo de texto.
+
+O ID da mensagem é a chave de deduplicação. Após o commit da transcrição, uma falha no
+processamento financeiro ou no envio da resposta pode ser reprocessada a partir da sua
+própria etapa. Se o worker parar depois que a OpenAI recebeu o áudio e antes de o commit
+ser concluído, a recuperação da fila pode repetir a chamada de transcrição.
+
+### Estimativa de custo
+
+A tarifa estimada de `gpt-4o-mini-transcribe` é **US$ 0,003 por minuto**. Para 30 áudios
+de 30 segundos por usuário ao mês, a estimativa é **US$ 0,045 por usuário/mês**.
+Multiplique a soma de `audio_duration_ms` nas chamadas por US$ 0,003 e divida por
+60.000 para estimar o custo de transcrição. A fatura depende dos tokens cobrados e das
+tentativas processadas pelo provedor. A estimativa cobre somente a transcrição.
+[Preços da OpenAI](https://developers.openai.com/api/docs/pricing)
+
+A OpenAI anuncia encerramento dos modelos da família GPT-4o Transcribe em 26 de fevereiro
+de 2027. Antes dessa data, valide um sucessor com sinal de confiança equivalente e atualize
+o contrato da integração. [Guia de transcrição da OpenAI](https://developers.openai.com/api/docs/guides/speech-to-text)

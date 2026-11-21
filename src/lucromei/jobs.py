@@ -138,12 +138,14 @@ class JobQueue:
         handlers: dict[str, Handler],
         dead_hooks: dict[str, DeadHook] | None = None,
         lease: timedelta = timedelta(seconds=120),
+        lock_during_run: frozenset[str] = frozenset(),
         retry_policy: RetryPolicy = RetryPolicy(),
     ) -> None:
         self.session_factory = session_factory
         self.handlers = handlers
         self.dead_hooks = dead_hooks or {}
         self.lease = lease
+        self.lock_during_run = lock_during_run
         self.retry_policy = retry_policy
 
     def claim(self, *, limit: int, now: datetime | None = None) -> list[ClaimedJob]:
@@ -195,6 +197,10 @@ class JobQueue:
             try:
                 if handler is None:
                     raise PermanentJobError("unknown_job_kind")
+                if claimed.kind in self.lock_during_run:
+                    # A live, bounded external call must not be repeated by a lease reclaimer.
+                    if self._lock_if_still_ours(session, claimed) is None:
+                        return RUNNING
                 handler(session, claimed.payload, context)
                 job = self._lock_if_still_ours(session, claimed)
                 if job is None:

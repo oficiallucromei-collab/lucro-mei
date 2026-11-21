@@ -31,7 +31,11 @@ from lucromei.observability import (
     init_sentry,
 )
 from lucromei.onboarding import OnboardingRequired
-from lucromei.processing import enqueue_inbound_processing, record_delivery_statuses
+from lucromei.processing import (
+    enqueue_audio_transcription,
+    enqueue_inbound_processing,
+    record_delivery_statuses,
+)
 from lucromei.schemas import (
     CorrectionRequest,
     HealthResponse,
@@ -201,7 +205,17 @@ async def receive_whatsapp_webhook(
     messages = extract_inbound_messages(payload)
     accepted = duplicates = 0
     now = utc_now()
+    settings = get_settings()
     for message in messages:
+        is_audio = message.message_type == "audio" and settings.whatsapp_audio_enabled
+        if is_audio and (
+            message.phone_number_id != settings.whatsapp_phone_number_id
+            or not message.sender.isascii()
+            or not message.sender.isdecimal()
+            or not 8 <= len(message.sender) <= 15
+        ):
+            logger.warning("audio_webhook_rejected", extra={"outcome": "invalid_routing"})
+            continue
         created = insert_ignore(
             session,
             InboundEvent,
@@ -210,15 +224,19 @@ async def receive_whatsapp_webhook(
                 "sender": normalize_whatsapp_number(message.sender)[:32],
                 "message_type": message.message_type,
                 "text": message.text,
+                "media_id": message.media_id if is_audio else None,
                 "sent_at": message.sent_at or now,
                 "status": "received",
                 "received_at": now,
             },
         )
         if created:
-            enqueue_inbound_processing(
-                session, message.message_id[:255], max_attempts=get_settings().job_max_attempts
-            )
+            if is_audio:
+                enqueue_audio_transcription(session, message.message_id[:255])
+            else:
+                enqueue_inbound_processing(
+                    session, message.message_id[:255], max_attempts=settings.job_max_attempts
+                )
             accepted += 1
         else:
             duplicates += 1

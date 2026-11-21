@@ -132,6 +132,7 @@ class InboundEvent(Base):
     sender: Mapped[str] = mapped_column(String(32), nullable=False)
     message_type: Mapped[str] = mapped_column(String(32), nullable=False)
     text: Mapped[str | None] = mapped_column(Text)
+    media_id: Mapped[str | None] = mapped_column(String(64))
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # received -> processed, or failed when processing gave up.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="received")
