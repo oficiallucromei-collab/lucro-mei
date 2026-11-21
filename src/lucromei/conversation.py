@@ -69,6 +69,7 @@ class ConversationService:
         whatsapp_number: str,
         text: str,
         now: datetime | None = None,
+        commit: bool = True,
     ) -> CommandResult | None:
         if receipt := self._find_receipt(message_id):
             return self._result(receipt, duplicate=True)
@@ -120,6 +121,9 @@ class ConversationService:
             response_text=reply,
         )
         self.session.add(receipt)
+        if not commit:
+            self.session.flush()
+            return CommandResult(command_type, reply)
         try:
             self.session.commit()
         except IntegrityError:

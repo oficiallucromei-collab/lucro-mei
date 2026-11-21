@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     # The /v1 endpoints have no end-user authentication yet. Until they do, they are an
     # internal tool and require this key; when it is empty they are disabled entirely.
     internal_api_key: str = ""
+    # Background worker that processes received messages and sends replies. "embedded" runs it
+    # inside the web process; "off" leaves it to `python -m lucromei.worker`.
+    worker_mode: str = "embedded"
+    worker_poll_seconds: float = 1.0
+    worker_batch_size: int = 10
+    job_max_attempts: int = 8
+    # Must be longer than the slowest job (the WhatsApp HTTP timeout).
+    job_lease_seconds: int = 120
 
 
 def is_configured_secret(value: str) -> bool:

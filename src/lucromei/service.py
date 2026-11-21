@@ -89,10 +89,23 @@ class LedgerService:
         self.session = session
         self.tz = tz or get_business_timezone()
 
-    def process(self, *, message_id: str, whatsapp_number: str, text: str) -> ProcessedMessage:
+    def process(
+        self,
+        *,
+        message_id: str,
+        whatsapp_number: str,
+        text: str,
+        occurred_at: datetime | None = None,
+        commit: bool = True,
+    ) -> ProcessedMessage:
+        """Record the transaction described by a message, once per message ID.
+
+        With commit=False the caller owns the transaction: nothing is committed and a concurrent
+        insert of the same message ID surfaces as IntegrityError for the caller to retry.
+        """
         if existing := self._find_message(message_id):
             return self._processed(existing, whatsapp_number, duplicate=True)
-        parsed = parse_transaction(text)
+        parsed = parse_transaction(text, now=occurred_at)
         business = self.get_or_create_business(whatsapp_number)
         inbound = InboundMessage(
             external_id=message_id,
@@ -109,6 +122,9 @@ class LedgerService:
         )
         transaction.events.append(TransactionEvent(event_type="created", changes=_snapshot(parsed)))
         self.session.add(transaction)
+        if not commit:
+            self.session.flush()
+            return ProcessedMessage(message_id, whatsapp_number, effective_transaction(transaction))
         try:
             self.session.commit()
         except IntegrityError:

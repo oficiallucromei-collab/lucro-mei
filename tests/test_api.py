@@ -1,49 +1,24 @@
-import hmac
-import json
-import os
-from collections.abc import Iterator
 from datetime import UTC, datetime
-from hashlib import sha256
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from support import (
+    TestingSession,
+    client,
+    reset_state,
+    signed_webhook,
+    whatsapp_payload,
+)
 
 from lucromei.config import get_settings
-from lucromei.db import get_session
 from lucromei.main import app
 from lucromei.models import (
-    Base,
     CommandReceipt,
     InboundMessage,
     Transaction,
     TransactionEvent,
 )
-from lucromei.whatsapp import MockOutboundSender
 
-# CI sets LUCROMEI_TEST_DATABASE_URL to a real PostgreSQL; locally an in-memory SQLite is used.
-TEST_DATABASE_URL = os.environ.get("LUCROMEI_TEST_DATABASE_URL")
-if TEST_DATABASE_URL:
-    engine = create_engine(TEST_DATABASE_URL)
-else:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-TestingSession = sessionmaker(bind=engine, expire_on_commit=False)
-
-
-def override_session() -> Iterator[Session]:
-    with TestingSession() as session:
-        yield session
-
-
-app.dependency_overrides[get_session] = override_session
-INTERNAL_API_KEY = "test-internal-key"
-client = TestClient(app, headers={"X-Internal-Api-Key": INTERNAL_API_KEY})
 SAO_PAULO = ZoneInfo("America/Sao_Paulo")
 
 
@@ -53,13 +28,7 @@ def current_month_params() -> dict:
 
 
 def setup_function() -> None:
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    get_settings().whatsapp_verify_token = "verify-test-token"
-    get_settings().whatsapp_app_secret = "test-app-secret"
-    get_settings().internal_api_key = INTERNAL_API_KEY
-    get_settings().business_timezone = "America/Sao_Paulo"
-    app.state.whatsapp_sender = MockOutboundSender()
+    reset_state()
 
 
 def create_transaction(message_id: str, text: str) -> dict:
@@ -188,47 +157,6 @@ def test_internal_api_rejects_missing_or_wrong_key() -> None:
         assert session.query(InboundMessage).count() == 0
 
 
-def whatsapp_payload(message_id: str, text: str, sender: str = "5511999999999") -> dict:
-    return {
-        "object": "whatsapp_business_account",
-        "entry": [
-            {
-                "id": "business-account-id",
-                "changes": [
-                    {
-                        "field": "messages",
-                        "value": {
-                            "messaging_product": "whatsapp",
-                            "messages": [
-                                {
-                                    "from": sender,
-                                    "id": message_id,
-                                    "timestamp": "1795032000",
-                                    "type": "text",
-                                    "text": {"body": text},
-                                }
-                            ],
-                        },
-                    }
-                ],
-            }
-        ],
-    }
-
-
-def signed_webhook(payload: dict, secret: str = "test-app-secret"):
-    body = json.dumps(payload, separators=(",", ":")).encode()
-    signature = "sha256=" + hmac.new(secret.encode(), body, sha256).hexdigest()
-    return client.post(
-        "/webhooks/whatsapp",
-        content=body,
-        headers={
-            "content-type": "application/json",
-            "X-Hub-Signature-256": signature,
-        },
-    )
-
-
 def test_whatsapp_webhook_verification() -> None:
     response = client.get(
         "/webhooks/whatsapp",
@@ -265,14 +193,7 @@ def test_whatsapp_webhook_rejects_invalid_signature_without_writing() -> None:
 def test_whatsapp_webhook_normalizes_processes_and_replies() -> None:
     response = signed_webhook(whatsapp_payload("wamid.webhook", "Recebi 150 por um corte"))
     assert response.status_code == 200
-    assert response.json() == {
-        "received": True,
-        "processed": 1,
-        "commands": 0,
-        "duplicates": 0,
-        "clarification_required": 0,
-        "ignored": 0,
-    }
+    assert response.json() == {"received": True, "accepted": 1, "duplicates": 0}
     sent = app.state.whatsapp_sender.sent_messages
     assert len(sent) == 1
     assert sent[0].recipient == "5511999999999"
@@ -283,7 +204,7 @@ def test_whatsapp_duplicate_delivery_does_not_duplicate_transaction() -> None:
     payload = whatsapp_payload("wamid.duplicate", "Gastei 80 em produtos")
     first = signed_webhook(payload)
     second = signed_webhook(payload)
-    assert first.json()["duplicates"] == 0
+    assert first.json()["accepted"] == 1
     assert second.json()["duplicates"] == 1
     with TestingSession() as session:
         assert session.query(Transaction).count() == 1
@@ -303,7 +224,7 @@ def test_whatsapp_duplicate_delivery_never_sends_already_registered_notice() -> 
 
 def test_whatsapp_ambiguous_message_requests_clarification() -> None:
     response = signed_webhook(whatsapp_payload("wamid.ambiguous", "Paguei 50 para João"))
-    assert response.json()["clarification_required"] == 1
+    assert response.status_code == 200
     assert "Não entendi" in app.state.whatsapp_sender.sent_messages[0].text
 
 
@@ -315,10 +236,8 @@ def test_whatsapp_undo_is_idempotent_across_duplicate_deliveries() -> None:
     initial = signed_webhook(payload)
     duplicate = signed_webhook(payload)
 
-    assert initial.json()["commands"] == 1
-    assert initial.json()["duplicates"] == 0
-    assert duplicate.json()["commands"] == 1
-    assert duplicate.json()["duplicates"] == 1
+    assert initial.json()["accepted"] == 1
+    assert duplicate.json() == {"received": True, "accepted": 0, "duplicates": 1}
     with TestingSession() as session:
         events = session.query(TransactionEvent).filter_by(event_type="reversed").all()
         assert len(events) == 1
@@ -335,7 +254,7 @@ def test_whatsapp_correction_preserves_original_transaction() -> None:
         whatsapp_payload("wamid.correction", "corrigir última despesa para R$ 75,50")
     )
 
-    assert response.json()["commands"] == 1
+    assert response.status_code == 200
     assert "R$ 75,50" in app.state.whatsapp_sender.sent_messages[-1].text
     with TestingSession() as session:
         stored = session.get(Transaction, created["transaction_id"])
@@ -363,7 +282,7 @@ def test_whatsapp_monthly_summary_reply_uses_effective_ledger() -> None:
 
     response = signed_webhook(whatsapp_payload("wamid.summary", "Quanto lucrei este mês?"))
 
-    assert response.json()["commands"] == 1
+    assert response.status_code == 200
     reply = app.state.whatsapp_sender.sent_messages[-1].text
     assert "Entradas: R$ 500,00" in reply
     assert "Despesas do negócio: R$ 125,00" in reply

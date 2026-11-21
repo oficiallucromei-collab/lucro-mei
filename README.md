@@ -30,6 +30,9 @@ This initial scaffold includes:
   after personal withdrawals;
 - WhatsApp Cloud API webhook verification and signature validation;
 - normalized inbound text messages with mocked outbound confirmations;
+- background processing: the webhook only validates, records the message once (its Meta ID is
+  the idempotency key) and answers 200; a PostgreSQL job queue (`SELECT ... FOR UPDATE SKIP
+  LOCKED`) then processes it and sends the reply, with bounded retries and exponential backoff;
 - idempotent WhatsApp commands for undo, corrections, and monthly summaries;
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
@@ -48,6 +51,22 @@ LUCROMEI_TEST_DATABASE_URL=postgresql+psycopg://... pytest   # real PostgreSQL, 
 alembic upgrade head
 uvicorn lucromei.main:app --reload
 ```
+
+### Background worker
+
+Received WhatsApp messages are processed by a worker that reads the `jobs` table. By default
+(`LUCROMEI_WORKER_MODE=embedded`) it runs inside the web process. To run it separately, set
+`LUCROMEI_WORKER_MODE=off` on the web service and start:
+
+```bash
+python -m lucromei.worker          # keeps running
+python -m lucromei.worker --once   # drains due jobs and exits
+```
+
+Jobs that fail are retried with exponential backoff (5s, 10s, 20s, … capped at 15 min) up to
+`LUCROMEI_JOB_MAX_ATTEMPTS`, then marked `dead` and kept for inspection. Replies are sent at
+least once: if the process dies right after WhatsApp accepts a message and before the database
+commit, that reply can be sent again.
 
 Open `http://127.0.0.1:8000/docs` for the interactive API documentation.
 
