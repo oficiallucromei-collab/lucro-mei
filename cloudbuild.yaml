@@ -2,7 +2,15 @@ serviceAccount: projects/lucro-mei/serviceAccounts/lucromei-build@lucro-mei.iam.
 options:
   logging: CLOUD_LOGGING_ONLY
   requestedVerifyOption: VERIFIED
-timeout: 1200s
+timeout: 1800s
+
+# _DEPLOY=true (the trigger default) migrates the database and moves the service to the
+# image just built. Pass _DEPLOY=false to only publish the image.
+substitutions:
+  _DEPLOY: "true"
+  _REGION: southamerica-east1
+  _SERVICE: lucromei-test
+  _MIGRATE_JOB: lucromei-migrate
 
 steps:
   - id: validate-release
@@ -36,6 +44,47 @@ steps:
     args:
       - scripts/smoke-image.sh
       - southamerica-east1-docker.pkg.dev/$PROJECT_ID/lucromei/lucromei:$COMMIT_SHA
+
+  - id: push-image
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -euc
+      - |
+        image=southamerica-east1-docker.pkg.dev/$PROJECT_ID/lucromei/lucromei:$COMMIT_SHA
+        docker push "$$image"
+        docker inspect --format='{{index .RepoDigests 0}}' "$$image" > /workspace/image-digest
+        grep -Eq '^southamerica-east1-docker[.]pkg[.]dev/lucro-mei/lucromei/lucromei@sha256:[a-f0-9]{64}$$' /workspace/image-digest
+        cat /workspace/image-digest
+
+  # Migrations must stay additive: the revision still serving keeps running while they apply.
+  - id: migrate-database
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -euc
+      - |
+        [[ "$_DEPLOY" == "true" ]] || { echo "Skipping: _DEPLOY=$_DEPLOY"; exit 0; }
+        image="$$(cat /workspace/image-digest)"
+        gcloud run jobs update $_MIGRATE_JOB --region=$_REGION --image="$$image" --quiet
+        gcloud run jobs execute $_MIGRATE_JOB --region=$_REGION --wait
+
+  - id: deploy-service
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -euc
+      - |
+        [[ "$_DEPLOY" == "true" ]] || { echo "Skipping: _DEPLOY=$_DEPLOY"; exit 0; }
+        image="$$(cat /workspace/image-digest)"
+        gcloud run services update $_SERVICE --region=$_REGION --image="$$image" --quiet
+        url="$$(gcloud run services describe $_SERVICE --region=$_REGION --format='value(status.url)')"
+        for attempt in 1 2 3 4 5; do
+          curl -fsS "$$url/health" && exit 0
+          sleep 5
+        done
+        echo "Health check failed for $$url" >&2
+        exit 1
 
 images:
   - southamerica-east1-docker.pkg.dev/$PROJECT_ID/lucromei/lucromei:$COMMIT_SHA

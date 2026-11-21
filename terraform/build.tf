@@ -17,8 +17,7 @@ resource "google_artifact_registry_repository_iam_member" "build_writer" {
   member     = "serviceAccount:${google_service_account.build.email}"
 }
 
-# Project-level grants (roles/logging.logWriter for the build account) need a project IAM
-# admin and are applied by the project owner outside Terraform; see README.
+# Grants that need an IAM admin (log writing, actAs on lucromei-runtime) are in iam.tf.
 
 resource "google_storage_bucket" "build_source" {
   name                        = "${local.project_id}-release-source-312975377897"
@@ -41,6 +40,21 @@ resource "google_storage_bucket_iam_member" "build_source_reader" {
   bucket = google_storage_bucket.build_source.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.build.email}"
+}
+
+# Deploy rights for cloudbuild.yaml, scoped to the one service and job it releases.
+resource "google_cloud_run_v2_service_iam_member" "build_deployer" {
+  name     = google_cloud_run_v2_service.test.name
+  location = google_cloud_run_v2_service.test.location
+  role     = "roles/run.developer"
+  member   = "serviceAccount:${google_service_account.build.email}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "build_migrator" {
+  name     = google_cloud_run_v2_job.migrate.name
+  location = google_cloud_run_v2_job.migrate.location
+  role     = "roles/run.developer"
+  member   = "serviceAccount:${google_service_account.build.email}"
 }
 
 output "build_source_bucket" {
