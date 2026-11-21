@@ -1,7 +1,7 @@
 variable "image" {
   description = "Artifact Registry image pinned to a reviewed digest."
   type        = string
-  default     = "southamerica-east1-docker.pkg.dev/lucro-mei/lucromei/lucromei@sha256:0ed5eda34d8c2141632427a0fa0f91164829c08024ef10e5d7479dd4111250f3"
+  default     = "southamerica-east1-docker.pkg.dev/lucro-mei/lucromei/lucromei@sha256:cb5c1f17d8059d3a65d94fa39c7e2f54604709601b63daa8e3a032a674c65d80"
 
   validation {
     condition     = can(regex("^southamerica-east1-docker[.]pkg[.]dev/lucro-mei/lucromei/lucromei@sha256:[a-f0-9]{64}$", var.image))
