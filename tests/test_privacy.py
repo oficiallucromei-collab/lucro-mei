@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from support import (
@@ -36,7 +37,13 @@ from lucromei.models import (
 from lucromei.processing import enqueue_maintenance
 
 OTHER = "5531977776666"
-START = datetime(2026, 11, 21, 15, 0, tzinfo=UTC)
+# Ahead of the real clock: jobs are enqueued with the real time and run here at START, so a
+# fixed START in the past would leave them never due (this broke on 2026-11-21 15:00 UTC).
+# Also on the hour, so "START + 30 minutes" stays in the same hourly maintenance interval.
+START = (datetime.now(UTC) + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+DELETION_DAY = (START + timedelta(days=7)).astimezone(ZoneInfo("America/Sao_Paulo")).strftime(
+    "%d/%m/%Y"
+)
 _clock = {"ts": 1795032000}
 
 
@@ -174,7 +181,7 @@ def request_deletion(now: datetime = START) -> None:
     assert "não tem como desfazer" in warning
     assert "responda APAGAR" in warning
     [scheduled] = say("APAGAR", now=now + timedelta(minutes=2))
-    assert "Seus dados serão apagados em 28/11/2026" in scheduled
+    assert f"Seus dados serão apagados em {DELETION_DAY}" in scheduled
 
 
 def test_confirmed_deletion_blocks_account_then_erases_everything_after_grace() -> None:
@@ -203,7 +210,7 @@ def test_confirmed_deletion_blocks_account_then_erases_everything_after_grace() 
     request_deletion()
 
     [blocked] = say("Recebi 999 por um corte", now=START + timedelta(days=1))
-    assert "marcada para ser apagada em 28/11/2026" in blocked
+    assert f"marcada para ser apagada em {DELETION_DAY}" in blocked
     assert count(Transaction, business_id=owner_id) == 1  # nothing new recorded
     assert "Lançamentos (1):" in say("meus dados", now=START + timedelta(days=1))[0]
 

@@ -48,6 +48,8 @@ locals {
   # Versions in use when they are not 1. var.secret_versions overrides these per release.
   pinned_secret_versions = {
     LUCROMEI_WHATSAPP_ACCESS_TOKEN = "3"
+    # Rotated on 2026-11-21 after the Neon owner password was exposed (docs/seguranca.md).
+    LUCROMEI_MIGRATE_DATABASE_URL = "2"
   }
   secret_versions = merge(local.pinned_secret_versions, var.secret_versions)
 

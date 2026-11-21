@@ -9,12 +9,12 @@ import pytest
 from sqlalchemy import select
 from support import (
     TestingSession,
-    drain_jobs,
     onboard,
+    post_webhook,
     reset_state,
     sent_texts,
-    signed_webhook,
     whatsapp_payload,
+    worker,
 )
 
 from lucromei.config import get_settings
@@ -61,6 +61,19 @@ def business(trial_ends_at: datetime, *, started_days_ago: int = 14) -> str:
         row.trial_started_at = NOW - timedelta(days=started_days_ago)
         session.commit()
     return business_id
+
+
+def drain_jobs(sender=None) -> None:
+    """Run queued jobs without the worker's own maintenance, which uses the real clock and
+    would send notices depending on the time of day the tests run."""
+    runner = worker(sender)
+    runner.schedule_maintenance = lambda now: None
+    runner.drain()
+
+
+def signed_webhook(payload: dict) -> None:
+    assert post_webhook(payload).status_code == 200
+    drain_jobs()
 
 
 def maintenance(now: datetime = NOW) -> None:
