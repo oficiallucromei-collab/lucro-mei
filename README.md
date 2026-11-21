@@ -39,6 +39,11 @@ This initial scaffold includes:
   last week (Monday to Sunday) and this or last month ("quanto ganhei essa semana?", "resumo
   de hoje"), the last 10 entries ("últimos lançamentos") and help ("ajuda"); periods follow
   the local calendar of the moment the message was sent;
+- several entries in one message (one per line, separated by ";", or "recebi 150 e gastei
+  30"): the bot previews them all, records nothing until SIM, then writes every entry in the
+  same database transaction (all or nothing) with idempotency keys "<message id>#<n>"; a line
+  it cannot read makes it record nothing and name the line; up to 10 entries; "desfazer"
+  undoes the whole batch;
 - backdated entries: "ontem recebi 200", "anteontem", "dia 15", "15/11" or "15/11/2026" move
   the entry to noon of that local day; future dates, impossible dates and dates older than a
   year are refused with an explicit reply; "desfazer" undoes the entry recorded last, whatever

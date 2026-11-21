@@ -355,6 +355,15 @@ def purge_old_text(session: Session, now: datetime, settings: Settings) -> dict[
             )
             .values(source_text="")
         ).rowcount,
+        "pending_batches": session.execute(
+            update(PendingEntry)
+            .where(
+                PendingEntry.created_at < cutoff,
+                PendingEntry.status != "open",
+                PendingEntry.items.is_not(None),
+            )
+            .values(items=None)
+        ).rowcount,
         "jobs": session.execute(
             delete(Job).where(
                 ((Job.status == "done") & (Job.finished_at < now - timedelta(days=7)))

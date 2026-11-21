@@ -231,6 +231,14 @@ class PendingEntry(Base):
     candidate_types: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     # "rules" (deterministic parser) or "ai" (AI fallback, always confirmed by the user).
     origin: Mapped[str] = mapped_column(String(20), nullable=False, default="rules")
+    # "single" (one entry, the user picks its type) or "batch" (several entries from one
+    # message, previewed in `items` and recorded together after SIM).
+    kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="single", server_default="single"
+    )
+    # Batch only: [{"transaction_type", "amount_cents", "description", "occurred_at"}, ...].
+    # Erased with the other message text after the retention period.
+    items: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON(none_as_null=True))
     # open -> resolved | cancelled | expired | replaced
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
