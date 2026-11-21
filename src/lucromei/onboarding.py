@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from lucromei import growth
 from lucromei.config import Settings, get_business_timezone
 from lucromei.domain import ParseError, parse_transaction
 from lucromei.models import Business, TermsAcceptance
@@ -76,6 +77,7 @@ def handle(
     step = business.onboarding_step
     if step == NEW:
         business.onboarding_step = AWAITING_NAME
+        growth.claim(session, business, text, now)
         if _looks_like_transaction(text):
             return f"{WELCOME}\n\n{NOT_RECORDED_YET}"
         return WELCOME

@@ -21,6 +21,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from lucromei.config import Settings, get_business_timezone
 from lucromei.models import (
+    Acquisition,
+    AcquisitionClick,
     AIUsage,
     Business,
     CommandReceipt,
@@ -316,6 +318,8 @@ def delete_business_data(session: Session, business: Business) -> None:
         delete(CommandReceipt).where(CommandReceipt.business_id == business_id),
         delete(AIUsage).where(AIUsage.business_id == business_id),
         delete(TermsAcceptance).where(TermsAcceptance.business_id == business_id),
+        delete(Acquisition).where(Acquisition.business_id == business_id),
+        delete(AcquisitionClick).where(AcquisitionClick.business_id == business_id),
         delete(SubscriptionEvent).where(
             SubscriptionEvent.subscription_id.in_(
                 select(Subscription.id).where(Subscription.business_id == business_id)

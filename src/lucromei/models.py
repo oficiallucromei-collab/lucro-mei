@@ -345,3 +345,30 @@ class SubscriptionEvent(Base):
     provider_subscription_id: Mapped[str | None] = mapped_column(String(255))
     subscription_id: Mapped[str | None] = mapped_column(String(36))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AcquisitionClick(Base):
+    """A visit to /experimentar: campaign tags under a random one-use code. No personal data."""
+
+    __tablename__ = "acquisition_clicks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    tags: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    business_id: Mapped[str | None] = mapped_column(String(36))
+
+
+class Acquisition(Base):
+    """Where a business came from (first touch). Deleted with the account."""
+
+    __tablename__ = "acquisitions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    business_id: Mapped[str] = mapped_column(
+        ForeignKey("businesses.id"), unique=True, nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    medium: Mapped[str | None] = mapped_column(String(64))
+    campaign: Mapped[str | None] = mapped_column(String(64))
+    content: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
