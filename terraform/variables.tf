@@ -23,6 +23,8 @@ variable "secret_versions" {
         "LUCROMEI_MIGRATE_DATABASE_URL",
         "LUCROMEI_PRIVACY_HASH_KEY",
         "LUCROMEI_SENTRY_DSN",
+        "LUCROMEI_STRIPE_SECRET_KEY",
+        "LUCROMEI_STRIPE_WEBHOOK_SECRET",
         "LUCROMEI_WHATSAPP_ACCESS_TOKEN",
         "LUCROMEI_WHATSAPP_APP_SECRET",
         "LUCROMEI_WHATSAPP_VERIFY_TOKEN",
@@ -89,4 +91,22 @@ variable "worker_instances" {
   description = "Maximum instances of the separate worker."
   type        = number
   default     = 1
+}
+
+variable "public_url" {
+  description = "Public https address of the service (Stripe return pages)."
+  type        = string
+  default     = "https://lucromei-test-vn7ehb54iq-rj.a.run.app"
+}
+
+variable "stripe_test_enabled" {
+  description = "Wire the Stripe TEST secrets into the service. Fill them first with scripts/set-secret.sh; the app refuses live keys."
+  type        = bool
+  default     = false
+}
+
+variable "stripe_price_id" {
+  description = "Stripe TEST price (monthly, BRL, same amount as LUCROMEI_SUBSCRIPTION_PRICE_CENTS)."
+  type        = string
+  default     = ""
 }

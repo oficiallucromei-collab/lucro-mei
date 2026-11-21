@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from lucromei import (
     ai,
     batch,
+    billing,
     clarification,
     notifications,
     onboarding,
@@ -35,13 +36,15 @@ from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, in
 from lucromei.models import (
     AIUsage,
     Business,
+    DeletionRequest,
     DeliveryStatusEvent,
     InboundEvent,
     OutboundMessage,
+    Subscription,
     new_id,
 )
 from lucromei.service import EffectiveTransaction, LedgerService
-from lucromei.templates import Template
+from lucromei.templates import SUBSCRIPTION_ACTIVE, Template
 from lucromei.whatsapp import (
     OutboundSender,
     WhatsAppSendError,
@@ -63,6 +66,7 @@ AUDIO_ATTEMPTS = 3
 SEND_MESSAGE = "send_message"
 MAINTENANCE = "maintenance"
 RETENTION = "retention"
+STRIPE_SYNC = "stripe_sync"
 RETENTION_PAUSE_SECONDS = 5
 DELETE_ACCOUNT = "delete_account"
 
@@ -661,7 +665,53 @@ def handle_retention(session: Session, payload: dict[str, Any], ctx: JobContext)
 
 
 def handle_delete_account(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
+    request = session.get(DeletionRequest, payload["deletion_request_id"])
+    if request is not None and request.status == privacy.SCHEDULED:
+        # Stop future charges before the account (and our record of the plan) disappears.
+        for sub in session.scalars(
+            select(Subscription).where(
+                Subscription.business_id == request.business_id,
+                Subscription.provider == "stripe",
+                Subscription.provider_subscription_id.is_not(None),
+                Subscription.status.in_(subscription.OPEN_STATUSES),
+            )
+        ):
+            checkout = ctx.services.get("checkout")
+            if checkout is None:
+                raise PermanentJobError("stripe_not_configured")
+            checkout.cancel(sub.provider_subscription_id)
     privacy.execute_deletion(session, payload["deletion_request_id"], ctx.now)
+
+
+def handle_stripe_sync(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
+    checkout = ctx.services.get("checkout")
+    if checkout is None:
+        raise PermanentJobError("stripe_not_configured")
+    paid = billing.sync(
+        session,
+        checkout.client,
+        get_settings(),
+        payload.get("stripe_subscription_id"),
+        payload.get("subscription_id"),
+        ctx.now,
+    )
+    if paid is None:
+        return
+    business = session.get(Business, paid.business_id)
+    if business is None:
+        return
+    until = _aware(paid.current_period_end).astimezone(get_business_timezone()).strftime("%d/%m/%Y")
+    use_template = notifications.needs_template(session, business, ctx.now)
+    queue_reply(
+        session,
+        recipient=business.whatsapp_number,
+        in_reply_to=f"notice:{business.id}:paid:{until}",
+        text=SUBSCRIPTION_ACTIVE.render([until]),
+        max_attempts=ctx.services["max_attempts"],
+        now=ctx.now,
+        template=SUBSCRIPTION_ACTIVE if use_template else None,
+        template_params=[until],
+    )
 
 
 def mark_event_failed(session: Session, payload: dict[str, Any], error: str) -> None:
@@ -689,6 +739,7 @@ HANDLERS = {
     SEND_MESSAGE: handle_send_message,
     MAINTENANCE: handle_maintenance,
     RETENTION: handle_retention,
+    STRIPE_SYNC: handle_stripe_sync,
     DELETE_ACCOUNT: handle_delete_account,
 }
 DEAD_HOOKS = {

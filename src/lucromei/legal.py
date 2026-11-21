@@ -226,3 +226,18 @@ descobrir o seu número. Cópias de segurança expiram em até 30 dias.</p>
 <p>Mais detalhes na <a href="/privacidade">Política de Privacidade</a>.</p>
 """
     return _page("Como apagar seus dados do LucroMEI", body, settings)
+
+
+def checkout_html(settings: Settings, *, completed: bool) -> str:
+    if completed:
+        body = (
+            "<p>Recebemos seu pagamento. Assim que o Stripe confirmar, você recebe uma mensagem "
+            "no WhatsApp e pode continuar anotando normalmente.</p>"
+            "<p>Pode fechar esta página e voltar para o WhatsApp.</p>"
+        )
+        return _page("Obrigado por assinar o LucroMEI", body, settings)
+    body = (
+        "<p>O pagamento não foi concluído e nada foi cobrado. Quando quiser, mande ASSINAR no "
+        "WhatsApp para receber um novo link.</p>"
+    )
+    return _page("Assinatura não concluída", body, settings)

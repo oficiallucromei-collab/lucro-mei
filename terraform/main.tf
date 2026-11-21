@@ -59,11 +59,22 @@ locals {
   # wired into the service only when their feature flag is on.
   optional_secret_env = merge(
     var.sentry_enabled ? { LUCROMEI_SENTRY_DSN = "lucromei-sentry-dsn" } : {},
+    # Stripe TEST MODE only: the app refuses live keys (billing.py).
+    var.stripe_test_enabled ? {
+      LUCROMEI_STRIPE_SECRET_KEY     = "lucromei-stripe-test-secret-key"
+      LUCROMEI_STRIPE_WEBHOOK_SECRET = "lucromei-stripe-test-webhook-secret"
+    } : {},
   )
 
   secret_ids = toset(concat(
     values(local.secret_env),
-    ["lucromei-database-url", local.migrate_database_secret, "lucromei-sentry-dsn"],
+    [
+      "lucromei-database-url",
+      local.migrate_database_secret,
+      "lucromei-sentry-dsn",
+      "lucromei-stripe-test-secret-key",
+      "lucromei-stripe-test-webhook-secret",
+    ],
   ))
 }
 
@@ -229,6 +240,16 @@ resource "google_cloud_run_v2_service" "test" {
       env {
         name  = "LUCROMEI_CONTACT_EMAIL"
         value = var.contact_email
+      }
+
+      env {
+        name  = "LUCROMEI_PUBLIC_URL"
+        value = var.public_url
+      }
+
+      env {
+        name  = "LUCROMEI_STRIPE_PRICE_ID"
+        value = var.stripe_price_id
       }
 
       env {
