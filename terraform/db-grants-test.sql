@@ -1,5 +1,6 @@
 -- Least-privilege grants for the test service's database role (lucromei_test_runtime).
--- Run as the database owner after migrations that add tables. Schema changes stay with the
+-- Migrations now apply the grant for each new table themselves (lucromei.dbgrants); this file
+-- keeps the full list for reference and for rebuilding a database by hand. Schema changes stay with the
 -- owner, used only by the lucromei-migrate job.
 
 -- Ledger: no UPDATE, corrections are appended as events. DELETE only for LGPD erasure.

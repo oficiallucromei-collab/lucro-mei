@@ -3,6 +3,8 @@
 import sqlalchemy as sa
 from alembic import op
 
+from lucromei.dbgrants import grant_runtime
+
 revision = "20261121_0012"
 down_revision = "20261121_0011"
 branch_labels = None
@@ -27,6 +29,7 @@ def upgrade() -> None:
         sa.CheckConstraint("price_cents >= 0", name="ck_subscriptions_price"),
     )
     op.create_index("ix_subscriptions_business_status", "subscriptions", ["business_id", "status"])
+    grant_runtime("subscriptions", ("SELECT", "INSERT", "UPDATE", "DELETE"))
 
 
 def downgrade() -> None:
