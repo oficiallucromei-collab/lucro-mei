@@ -331,3 +331,12 @@ def test_command_without_applicable_transaction_is_safely_replayed() -> None:
     with TestingSession() as session:
         assert session.query(CommandReceipt).count() == 1
         assert session.query(TransactionEvent).count() == 0
+
+
+def test_openapi_schema_and_docs_only_exist_locally() -> None:
+    from lucromei.main import openapi_url_for
+
+    assert openapi_url_for("local") == "/openapi.json"
+    assert openapi_url_for(" Local ") == "/openapi.json"
+    assert openapi_url_for("production") is None
+    assert openapi_url_for("staging") is None

@@ -1,5 +1,7 @@
 import hmac
 import json
+import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -22,6 +24,12 @@ from lucromei.db import SessionLocal, get_session
 from lucromei.domain import ParseError
 from lucromei.jobs import insert_ignore
 from lucromei.models import InboundEvent, utc_now
+from lucromei.observability import (
+    accept_correlation_id,
+    configure_logging,
+    correlation_id,
+    init_sentry,
+)
 from lucromei.onboarding import OnboardingRequired
 from lucromei.processing import enqueue_inbound_processing, record_delivery_statuses
 from lucromei.schemas import (
@@ -48,6 +56,7 @@ from lucromei.whatsapp import (
 )
 from lucromei.worker import Worker
 
+logger = logging.getLogger(__name__)
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
@@ -68,15 +77,57 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.worker = None
 
 
+def openapi_url_for(environment: str) -> str | None:
+    """Publish the schema (and with it /docs and /redoc) only for local development."""
+
+    return "/openapi.json" if environment.strip().lower() == "local" else None
+
+
 app = FastAPI(
     title="LucroMEI API",
+    openapi_url=openapi_url_for(get_settings().environment),
     version="0.4.0",
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
     lifespan=lifespan,
 )
+configure_logging(get_settings().log_level)
+init_sentry(
+    get_settings().sentry_dsn,
+    environment=get_settings().environment,
+    traces_sample_rate=get_settings().sentry_traces_sample_rate,
+)
 check_production_settings(get_settings())
 app.state.whatsapp_sender = build_sender(get_settings())
 app.state.worker = None
+
+@app.middleware("http")
+async def correlation_middleware(request: Request, call_next):
+    """Give every request a correlation ID and log it without query strings or bodies."""
+
+    cid = accept_correlation_id(request.headers.get("X-Request-ID"))
+    token = correlation_id.set(cid)
+    started = time.monotonic()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = cid
+        return response
+    finally:
+        route = request.scope.get("route")
+        logger.info(
+            "http_request",
+            extra={
+                "method": request.method,
+                # The route template ("/v1/transactions/{transaction_id}/reversal"), never the
+                # query string, which can carry a phone number.
+                "path": getattr(route, "path", "unmatched"),
+                "status_code": status_code,
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
+        correlation_id.reset(token)
+
 
 
 def require_internal_api_key(
@@ -173,6 +224,10 @@ async def receive_whatsapp_webhook(
             duplicates += 1
     statuses = record_delivery_statuses(session, extract_statuses(payload), now)
     session.commit()
+    logger.info(
+        "whatsapp_webhook_received",
+        extra={"accepted": accepted, "duplicates": duplicates, "statuses": statuses},
+    )
     if accepted and (worker := getattr(request.app.state, "worker", None)) is not None:
         worker.wake()
     return {
