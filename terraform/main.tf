@@ -55,9 +55,15 @@ locals {
   # database role cannot change the schema.
   migrate_database_secret = "lucromei-test-migrate-database-url"
 
+  # Optional secrets: created empty here, filled by the owner with scripts/set-secret.sh, and
+  # wired into the service only when their feature flag is on.
+  optional_secret_env = merge(
+    var.sentry_enabled ? { LUCROMEI_SENTRY_DSN = "lucromei-sentry-dsn" } : {},
+  )
+
   secret_ids = toset(concat(
     values(local.secret_env),
-    ["lucromei-database-url", local.migrate_database_secret],
+    ["lucromei-database-url", local.migrate_database_secret, "lucromei-sentry-dsn"],
   ))
 }
 
@@ -226,7 +232,7 @@ resource "google_cloud_run_v2_service" "test" {
       }
 
       dynamic "env" {
-        for_each = local.secret_env
+        for_each = merge(local.secret_env, local.optional_secret_env)
 
         content {
           name = env.key

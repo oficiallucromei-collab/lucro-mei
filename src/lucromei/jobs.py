@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -128,6 +128,28 @@ def enqueue(
             "updated_at": now,
         },
     )
+
+
+@dataclass(frozen=True, slots=True)
+class QueueHealth:
+    due_jobs: int
+    oldest_due_seconds: int
+    dead_jobs: int
+
+
+def queue_health(session: Session, now: datetime, *, dead_since: datetime) -> QueueHealth:
+    """How far behind the queue is: due jobs not yet taken, and jobs that gave up."""
+    due = and_(Job.status == PENDING, Job.run_after <= now)
+    count, oldest = session.execute(
+        select(func.count(Job.id), func.min(Job.run_after)).where(due)
+    ).one()
+    dead = session.scalar(
+        select(func.count(Job.id)).where(Job.status == DEAD, Job.finished_at >= dead_since)
+    )
+    if oldest is not None and oldest.tzinfo is None:
+        oldest = oldest.replace(tzinfo=UTC)
+    lag = int((now - oldest).total_seconds()) if oldest is not None else 0
+    return QueueHealth(due_jobs=count, oldest_due_seconds=max(0, lag), dead_jobs=dead or 0)
 
 
 class JobQueue:
