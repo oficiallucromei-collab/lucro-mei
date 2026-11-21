@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!pyproject.toml
+!README.md
+!alembic.ini
+!migrations/
+!migrations/**
+!src/
+!src/**
+**/__pycache__
+**/*.py[cod]
+**/.env*

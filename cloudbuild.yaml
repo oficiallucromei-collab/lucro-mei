@@ -1,0 +1,41 @@
+serviceAccount: projects/lucro-mei/serviceAccounts/lucromei-build@lucro-mei.iam.gserviceaccount.com
+options:
+  logging: CLOUD_LOGGING_ONLY
+  requestedVerifyOption: VERIFIED
+timeout: 1200s
+
+steps:
+  - id: validate-release
+    name: python:3.12-slim
+    entrypoint: bash
+    env:
+      - RELEASE_COMMIT=$COMMIT_SHA
+      - RELEASE_PROJECT=$PROJECT_ID
+    args:
+      - -euc
+      - |
+        [[ "$$RELEASE_PROJECT" == "lucro-mei" ]]
+        [[ "$$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+        python -m pip install '.[dev]'
+        python -m ruff check src tests
+        python -m pytest
+
+  - id: build-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --pull
+      - --platform=linux/amd64
+      - --label=org.opencontainers.image.revision=$COMMIT_SHA
+      - --tag=southamerica-east1-docker.pkg.dev/$PROJECT_ID/lucromei/lucromei:$COMMIT_SHA
+      - .
+
+  - id: smoke-test-image
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - scripts/smoke-image.sh
+      - southamerica-east1-docker.pkg.dev/$PROJECT_ID/lucromei/lucromei:$COMMIT_SHA
+
+images:
+  - southamerica-east1-docker.pkg.dev/$PROJECT_ID/lucromei/lucromei:$COMMIT_SHA
