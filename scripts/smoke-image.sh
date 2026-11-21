@@ -12,6 +12,7 @@ container_id="$(docker run --detach --network none \
   --env LUCROMEI_WHATSAPP_ACCESS_TOKEN=smoke-access-token \
   --env LUCROMEI_WHATSAPP_PHONE_NUMBER_ID=123456789 \
   --env LUCROMEI_TERMS_URL=https://example.invalid/termos \
+  --env LUCROMEI_PRIVACY_HASH_KEY=smoke-privacy-hash-key-0123456789abcdef \
   "$image")"
 trap 'docker rm --force "$container_id" >/dev/null' EXIT
 

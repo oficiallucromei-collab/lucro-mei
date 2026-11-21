@@ -15,15 +15,23 @@ import {
   id = "projects/${local.project_id}/serviceAccounts/lucromei-runtime@${local.project_id}.iam.gserviceaccount.com"
 }
 
+# Secrets that existed before Terraform adopted the project. Secrets added later are created
+# by Terraform and must not be imported.
+locals {
+  adopted_secret_ids = setsubtract(local.secret_ids, ["lucromei-privacy-hash-key"])
+  # The migration secret was created by hand, but its runtime grant is created by Terraform.
+  adopted_secret_grants = setsubtract(local.adopted_secret_ids, [local.migrate_database_secret])
+}
+
 import {
-  for_each = local.secret_ids
+  for_each = local.adopted_secret_ids
 
   to = google_secret_manager_secret.app[each.key]
   id = "projects/${local.project_id}/secrets/${each.key}"
 }
 
 import {
-  for_each = local.secret_ids
+  for_each = local.adopted_secret_grants
 
   to = google_secret_manager_secret_iam_member.runtime_accessor[each.key]
   id = "projects/${local.project_id}/secrets/${each.key} roles/secretmanager.secretAccessor serviceAccount:lucromei-runtime@${local.project_id}.iam.gserviceaccount.com"

@@ -40,15 +40,25 @@ locals {
     LUCROMEI_WHATSAPP_APP_SECRET   = "lucromei-whatsapp-app-secret"
     LUCROMEI_WHATSAPP_VERIFY_TOKEN = "lucromei-whatsapp-verify-token"
     LUCROMEI_INTERNAL_API_KEY      = "lucromei-internal-api-key"
+    # HMAC key for the anonymous proof kept after an LGPD deletion. Payload added in Secret
+    # Manager, never in Terraform.
+    LUCROMEI_PRIVACY_HASH_KEY = "lucromei-privacy-hash-key"
   }
 
   # Versions in use when they are not 1. var.secret_versions overrides these per release.
   pinned_secret_versions = {
-    LUCROMEI_WHATSAPP_ACCESS_TOKEN = "2"
+    LUCROMEI_WHATSAPP_ACCESS_TOKEN = "3"
   }
   secret_versions = merge(local.pinned_secret_versions, var.secret_versions)
 
-  secret_ids = toset(concat(values(local.secret_env), ["lucromei-database-url"]))
+  # Owner credentials for schema migrations, used only by the migration job: the app's own
+  # database role cannot change the schema.
+  migrate_database_secret = "lucromei-test-migrate-database-url"
+
+  secret_ids = toset(concat(
+    values(local.secret_env),
+    ["lucromei-database-url", local.migrate_database_secret],
+  ))
 }
 
 resource "google_project_service" "api" {
@@ -189,12 +199,18 @@ resource "google_cloud_run_v2_service" "test" {
 
       env {
         name  = "LUCROMEI_WHATSAPP_PHONE_NUMBER_ID"
-        value = "1433058046563073"
+        value = "1434742236396843"
       }
 
       env {
         name  = "SSL_CERT_FILE"
         value = "/etc/ssl/certs/ca-certificates.crt"
+      }
+
+      env {
+        # Placeholder for the test service only. Real terms must be published before customers.
+        name  = "LUCROMEI_TERMS_URL"
+        value = var.terms_url
       }
 
       dynamic "env" {
