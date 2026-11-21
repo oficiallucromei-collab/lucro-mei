@@ -2,7 +2,17 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -74,3 +84,69 @@ class TransactionEvent(Base):
     reason: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     transaction: Mapped[Transaction] = relationship(back_populates="events")
+
+
+# SQLite only auto-increments INTEGER PRIMARY KEY columns; PostgreSQL gets a BIGINT identity.
+_SEQUENCE_ID = BigInteger().with_variant(Integer, "sqlite")
+
+
+class InboundEvent(Base):
+    """A WhatsApp message exactly as received, recorded before any processing.
+
+    The Meta message ID is the idempotency key: a redelivered webhook finds the existing row and
+    is ignored. `id` grows in arrival order and breaks ties between messages sent in the same
+    second, so each sender's messages are processed in order.
+    """
+
+    __tablename__ = "inbound_events"
+    __table_args__ = (Index("ix_inbound_events_sender_status", "sender", "status"),)
+    id: Mapped[int] = mapped_column(_SEQUENCE_ID, primary_key=True, autoincrement=True)
+    external_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    sender: Mapped[str] = mapped_column(String(32), nullable=False)
+    message_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # received -> processed, or failed when processing gave up.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="received")
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OutboundMessage(Base):
+    """A reply waiting to be, or already, sent. At most one reply per inbound message."""
+
+    __tablename__ = "outbound_messages"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    recipient: Mapped[str] = mapped_column(String(32), nullable=False)
+    in_reply_to: Mapped[str | None] = mapped_column(String(255), unique=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # queued -> sent, or failed when sending gave up.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    provider_message_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Job(Base):
+    """Background work stored in PostgreSQL and claimed with SELECT ... FOR UPDATE SKIP LOCKED."""
+
+    __tablename__ = "jobs"
+    __table_args__ = (Index("ix_jobs_status_run_after", "status", "run_after"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # pending -> running -> done, or dead after the last failed attempt.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Error class and code only: never message text or amounts.
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

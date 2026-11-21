@@ -1,4 +1,7 @@
 import hmac
+import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import (
@@ -15,9 +18,11 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from lucromei.config import get_settings, is_configured_secret
-from lucromei.conversation import ConversationService
-from lucromei.db import get_session
+from lucromei.db import SessionLocal, get_session
 from lucromei.domain import ParseError
+from lucromei.jobs import insert_ignore
+from lucromei.models import InboundEvent, utc_now
+from lucromei.processing import enqueue_inbound_processing
 from lucromei.schemas import (
     CorrectionRequest,
     HealthResponse,
@@ -27,23 +32,48 @@ from lucromei.schemas import (
     TransactionResponse,
     TransactionStateResponse,
 )
-from lucromei.service import LedgerError, LedgerService, TransactionNotFound
+from lucromei.service import (
+    LedgerError,
+    LedgerService,
+    TransactionNotFound,
+    normalize_whatsapp_number,
+)
 from lucromei.whatsapp import (
     InvalidWebhookSignature,
-    MockOutboundSender,
-    extract_text_messages,
-    format_confirmation,
+    build_sender,
+    extract_inbound_messages,
     verify_signature,
 )
+from lucromei.worker import Worker
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    worker = None
+    if settings.worker_mode == "embedded":
+        worker = Worker(SessionLocal, app.state.whatsapp_sender, settings)
+        worker.start()
+    app.state.worker = worker
+    try:
+        yield
+    finally:
+        if worker is not None:
+            worker.stop()
+        app.state.worker = None
+
+
 app = FastAPI(
     title="LucroMEI API",
-    version="0.3.0",
+    version="0.4.0",
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
+    lifespan=lifespan,
 )
-app.state.whatsapp_sender = MockOutboundSender()
+app.state.whatsapp_sender = build_sender(get_settings())
+app.state.worker = None
 
 
 def require_internal_api_key(
@@ -97,63 +127,51 @@ async def receive_whatsapp_webhook(
     session: SessionDep,
     signature: Annotated[str | None, Header(alias="X-Hub-Signature-256")] = None,
 ) -> dict[str, int | bool]:
+    """Validate, record and acknowledge. Processing and replies happen in the background.
+
+    Meta retries webhooks that are not answered quickly, so nothing slow happens here: each
+    message is stored once (its Meta ID is the idempotency key) together with its processing
+    job, in a single transaction, and the request returns 200.
+    """
+
     body = await request.body()
     try:
         verify_signature(body, signature, get_settings().whatsapp_app_secret)
     except InvalidWebhookSignature as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+    try:
+        payload = json.loads(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Corpo do webhook inválido.") from exc
 
-    payload = await request.json()
-    messages = extract_text_messages(payload)
-    processed = commands = duplicates = clarification_required = 0
-    service = LedgerService(session)
+    messages = extract_inbound_messages(payload)
+    accepted = duplicates = 0
+    now = utc_now()
     for message in messages:
-        command = ConversationService(session).handle(
-            message_id=message.message_id,
-            whatsapp_number=message.sender,
-            text=message.text,
+        created = insert_ignore(
+            session,
+            InboundEvent,
+            {
+                "external_id": message.message_id[:255],
+                "sender": normalize_whatsapp_number(message.sender)[:32],
+                "message_type": message.message_type,
+                "text": message.text,
+                "sent_at": message.sent_at or now,
+                "status": "received",
+                "received_at": now,
+            },
         )
-        if command is not None:
-            commands += 1
-            duplicates += int(command.duplicate)
-            # Meta redelivers messages it thinks were not acknowledged. The user already got
-            # this reply the first time, so a redelivery must stay silent.
-            if not command.duplicate:
-                app.state.whatsapp_sender.send_text(message.sender, command.reply)
-            continue
-        try:
-            result = service.process(
-                message_id=message.message_id,
-                whatsapp_number=message.sender,
-                text=message.text,
+        if created:
+            enqueue_inbound_processing(
+                session, message.message_id[:255], max_attempts=get_settings().job_max_attempts
             )
-        except ParseError:
-            clarification_required += 1
-            app.state.whatsapp_sender.send_text(
-                message.sender,
-                "Não entendi se isso é entrada, despesa ou retirada. "
-                "Envie uma operação por mensagem.",
-            )
-            continue
-        processed += 1
-        duplicates += int(result.duplicate)
-        if result.duplicate:
-            continue
-        app.state.whatsapp_sender.send_text(
-            message.sender,
-            format_confirmation(
-                result.transaction.transaction_type.value,
-                result.transaction.amount_cents,
-            ),
-        )
-    return {
-        "received": True,
-        "processed": processed,
-        "commands": commands,
-        "duplicates": duplicates,
-        "clarification_required": clarification_required,
-        "ignored": max(0, len(messages) - processed - commands - clarification_required),
-    }
+            accepted += 1
+        else:
+            duplicates += 1
+    session.commit()
+    if accepted and (worker := getattr(request.app.state, "worker", None)) is not None:
+        worker.wake()
+    return {"received": True, "accepted": accepted, "duplicates": duplicates}
 
 
 @internal_api.post(
