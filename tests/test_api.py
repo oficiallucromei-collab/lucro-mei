@@ -227,7 +227,10 @@ def test_whatsapp_duplicate_delivery_never_sends_already_registered_notice() -> 
 def test_whatsapp_ambiguous_message_requests_clarification() -> None:
     response = signed_webhook(whatsapp_payload("wamid.ambiguous", "Paguei 50 para João"))
     assert response.status_code == 200
-    assert "Não entendi" in app.state.whatsapp_sender.sent_messages[0].text
+    reply = app.state.whatsapp_sender.sent_messages[0].text
+    assert "despesa do negócio ou retirada pessoal?" in reply
+    with TestingSession() as session:
+        assert session.query(Transaction).count() == 0
 
 
 def test_whatsapp_undo_is_idempotent_across_duplicate_deliveries() -> None:

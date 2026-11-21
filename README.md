@@ -36,6 +36,10 @@ This initial scaffold includes:
   the idempotency key) and answers 200; a PostgreSQL job queue (`SELECT ... FOR UPDATE SKIP
   LOCKED`) then processes it and sends the reply, with bounded retries and exponential backoff;
 - idempotent WhatsApp commands for undo, corrections, and monthly summaries;
+- clarification instead of rejection: an ambiguous message ("Paguei 300 para o fornecedor") is
+  kept as a pending entry and the user is asked whether it is a business expense or a personal
+  withdrawal; the transaction is recorded only after the answer, and questions expire after
+  `LUCROMEI_PENDING_ENTRY_TTL_HOURS` (24 by default);
 - onboarding on first contact: name, type of business, acceptance of the terms (version and
   date stored in `terms_acceptances`) and the start of a 14-day free trial; nothing is written
   to the ledger before the terms are accepted;

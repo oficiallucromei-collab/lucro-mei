@@ -109,8 +109,8 @@ def test_redelivery_before_processing_creates_a_single_job() -> None:
     assert len(sent_texts()) == 1
 
 
-def test_redelivered_ambiguous_message_is_answered_once() -> None:
-    payload = whatsapp_payload("wamid.ambiguous-twice", "Paguei 50 para João")
+def test_redelivered_unclear_message_is_answered_once() -> None:
+    payload = whatsapp_payload("wamid.unclear-twice", "Oi, tudo bem?")
     signed_webhook(payload)
     signed_webhook(payload)
     assert sent_texts() == [NOT_UNDERSTOOD_REPLY]

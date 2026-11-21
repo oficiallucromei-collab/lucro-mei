@@ -16,10 +16,10 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from lucromei import onboarding
+from lucromei import clarification, onboarding
 from lucromei.config import get_settings
 from lucromei.conversation import ConversationService
-from lucromei.domain import ParseError
+from lucromei.domain import AmbiguousTransaction, ParseError
 from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, insert_ignore
 from lucromei.models import DeliveryStatusEvent, InboundEvent, OutboundMessage, new_id
 from lucromei.service import LedgerService
@@ -99,6 +99,30 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str:
             now=ctx.now,
             settings=get_settings(),
         )
+    settings = get_settings()
+    pending, expired = clarification.current_pending(session, business, ctx.now)
+    if pending is not None:
+        answer = clarification.parse_answer(event.text, clarification.candidates_of(pending))
+        if answer is clarification.CANCEL:
+            clarification.close(
+                pending, clarification.CANCELLED, ctx.now, resolution_message_id=event.external_id
+            )
+            return clarification.CANCELLED_REPLY
+        if answer is not None:
+            transaction = ledger.record_pending(
+                pending, answer, resolution_message_id=event.external_id
+            )
+            clarification.close(
+                pending,
+                clarification.RESOLVED,
+                ctx.now,
+                resolution_message_id=event.external_id,
+                transaction_id=transaction.id,
+            )
+            return format_confirmation(transaction.transaction_type.value, transaction.amount_cents)
+    elif expired is not None and clarification.looks_like_answer(event.text):
+        return clarification.EXPIRED_REPLY
+
     command = ConversationService(session).handle(
         message_id=event.external_id,
         whatsapp_number=event.sender,
@@ -116,7 +140,24 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str:
             occurred_at=event.sent_at,
             commit=False,
         )
+    except AmbiguousTransaction as ambiguity:
+        new_pending = clarification.create_pending(
+            session,
+            business,
+            source_message_id=event.external_id,
+            source_text=event.text,
+            amount_cents=ambiguity.amount_cents,
+            description=ambiguity.description,
+            occurred_at=event.sent_at,
+            candidates=ambiguity.candidates,
+            origin="rules",
+            now=ctx.now,
+            ttl=timedelta(hours=settings.pending_entry_ttl_hours),
+        )
+        return clarification.question(new_pending)
     except ParseError:
+        if pending is not None:
+            return "Não entendi a resposta. " + clarification.question(pending)
         return NOT_UNDERSTOOD_REPLY
     return format_confirmation(
         result.transaction.transaction_type.value, result.transaction.amount_cents
