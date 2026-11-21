@@ -22,7 +22,7 @@ from lucromei.db import SessionLocal, get_session
 from lucromei.domain import ParseError
 from lucromei.jobs import insert_ignore
 from lucromei.models import InboundEvent, utc_now
-from lucromei.processing import enqueue_inbound_processing
+from lucromei.processing import enqueue_inbound_processing, record_delivery_statuses
 from lucromei.schemas import (
     CorrectionRequest,
     HealthResponse,
@@ -42,6 +42,7 @@ from lucromei.whatsapp import (
     InvalidWebhookSignature,
     build_sender,
     extract_inbound_messages,
+    extract_statuses,
     verify_signature,
 )
 from lucromei.worker import Worker
@@ -168,10 +169,16 @@ async def receive_whatsapp_webhook(
             accepted += 1
         else:
             duplicates += 1
+    statuses = record_delivery_statuses(session, extract_statuses(payload), now)
     session.commit()
     if accepted and (worker := getattr(request.app.state, "worker", None)) is not None:
         worker.wake()
-    return {"received": True, "accepted": accepted, "duplicates": duplicates}
+    return {
+        "received": True,
+        "accepted": accepted,
+        "duplicates": duplicates,
+        "statuses": statuses,
+    }
 
 
 @internal_api.post(

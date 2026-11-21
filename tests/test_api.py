@@ -193,7 +193,7 @@ def test_whatsapp_webhook_rejects_invalid_signature_without_writing() -> None:
 def test_whatsapp_webhook_normalizes_processes_and_replies() -> None:
     response = signed_webhook(whatsapp_payload("wamid.webhook", "Recebi 150 por um corte"))
     assert response.status_code == 200
-    assert response.json() == {"received": True, "accepted": 1, "duplicates": 0}
+    assert response.json() == {"received": True, "accepted": 1, "duplicates": 0, "statuses": 0}
     sent = app.state.whatsapp_sender.sent_messages
     assert len(sent) == 1
     assert sent[0].recipient == "5511999999999"
@@ -237,7 +237,7 @@ def test_whatsapp_undo_is_idempotent_across_duplicate_deliveries() -> None:
     duplicate = signed_webhook(payload)
 
     assert initial.json()["accepted"] == 1
-    assert duplicate.json() == {"received": True, "accepted": 0, "duplicates": 1}
+    assert duplicate.json() == {"received": True, "accepted": 0, "duplicates": 1, "statuses": 0}
     with TestingSession() as session:
         events = session.query(TransactionEvent).filter_by(event_type="reversed").all()
         assert len(events) == 1

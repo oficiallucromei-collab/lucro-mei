@@ -9,6 +9,7 @@ never re-runs the ledger write. Each step is idempotent:
 - send_message only sends replies that are still queued.
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -18,9 +19,16 @@ from sqlalchemy.orm import Session
 from lucromei.conversation import ConversationService
 from lucromei.domain import ParseError
 from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, insert_ignore
-from lucromei.models import InboundEvent, OutboundMessage, new_id
+from lucromei.models import DeliveryStatusEvent, InboundEvent, OutboundMessage, new_id
 from lucromei.service import LedgerService
-from lucromei.whatsapp import OutboundSender, WhatsAppSendError, format_confirmation
+from lucromei.whatsapp import (
+    OutboundSender,
+    WhatsAppSendError,
+    WhatsAppStatus,
+    format_confirmation,
+)
+
+logger = logging.getLogger(__name__)
 
 PROCESS_MESSAGE = "process_message"
 SEND_MESSAGE = "send_message"
@@ -201,3 +209,42 @@ def _has_earlier_pending_message(session: Session, event: InboundEvent) -> bool:
         )
         is not None
     )
+
+
+def record_delivery_statuses(
+    session: Session, statuses: list[WhatsAppStatus], now: datetime
+) -> int:
+    """Store delivery receipts once each (Meta also redelivers these). Does not commit."""
+
+    recorded = 0
+    for status in statuses:
+        recorded += insert_ignore(
+            session,
+            DeliveryStatusEvent,
+            {
+                "id": new_id(),
+                "provider_message_id": status.provider_message_id,
+                "status": status.status,
+                "error_code": status.error_code,
+                "occurred_at": status.occurred_at,
+                "received_at": now,
+            },
+        )
+        if status.status == "failed":
+            logger.warning("whatsapp_delivery_failed", extra={"error": status.error_code})
+    return recorded
+
+
+# A message can be both delivered and read; the most advanced receipt wins. Failed is final.
+_STATUS_RANK = {"sent": 1, "delivered": 2, "read": 3, "failed": 4}
+
+
+def delivery_status(session: Session, provider_message_id: str) -> str | None:
+    """The most advanced delivery receipt received for a message we sent, if any."""
+
+    statuses = session.scalars(
+        select(DeliveryStatusEvent.status).where(
+            DeliveryStatusEvent.provider_message_id == provider_message_id
+        )
+    ).all()
+    return max(statuses, key=_STATUS_RANK.__getitem__, default=None)

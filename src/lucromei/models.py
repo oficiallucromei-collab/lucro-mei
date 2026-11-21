@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -150,3 +151,24 @@ class Job(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DeliveryStatusEvent(Base):
+    """A delivery receipt from WhatsApp (sent, delivered, read, failed) for a message we sent.
+
+    Append-only: a receipt can arrive before the send job has stored the WhatsApp message ID, so
+    receipts are kept on their own and joined by provider_message_id when needed.
+    """
+
+    __tablename__ = "whatsapp_status_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_message_id", "status", name="uq_whatsapp_status_events_message_status"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    provider_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
