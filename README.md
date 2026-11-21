@@ -23,7 +23,11 @@ This initial scaffold includes:
 - PostgreSQL persistence with Alembic migrations;
 - database-enforced idempotent inbound-message processing;
 - immutable correction and reversal events;
-- deterministic monthly summaries separating personal withdrawals;
+- shared Brazilian amount parser (`1.500,00`, `1500`, `12,50`, `12.50`, `R$`) and
+  quantities with an explicit total (`Fiz 3 cortes por 90 reais`);
+- deterministic monthly summaries in the business's local time zone (default
+  `America/Sao_Paulo`), separating the business result (income − expenses) from what is left
+  after personal withdrawals;
 - WhatsApp Cloud API webhook verification and signature validation;
 - normalized inbound text messages with mocked outbound confirmations;
 - idempotent WhatsApp commands for undo, corrections, and monthly summaries;
@@ -39,7 +43,8 @@ to the audit event stream, and summaries replay those events to obtain the effec
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
-pytest
+pytest                     # in-memory SQLite
+LUCROMEI_TEST_DATABASE_URL=postgresql+psycopg://... pytest   # real PostgreSQL, as in CI
 alembic upgrade head
 uvicorn lucromei.main:app --reload
 ```
@@ -48,9 +53,14 @@ Open `http://127.0.0.1:8000/docs` for the interactive API documentation.
 
 Example:
 
+The `/v1` endpoints have no end-user authentication yet, so they are an internal tool: they
+are disabled unless `LUCROMEI_INTERNAL_API_KEY` is set, and every request must send that key in
+the `X-Internal-Api-Key` header.
+
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/messages \
   -H 'content-type: application/json' \
+  -H "X-Internal-Api-Key: $LUCROMEI_INTERNAL_API_KEY" \
   -d '{
     "message_id": "wamid.demo-1",
     "whatsapp_number": "+5511999999999",

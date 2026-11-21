@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from lucromei.domain import TransactionType
+from lucromei.money import MAX_AMOUNT_CENTS
 
 
 class HealthResponse(BaseModel):
@@ -26,7 +27,7 @@ class TransactionResponse(BaseModel):
 
 
 class CorrectionRequest(BaseModel):
-    amount_cents: int | None = Field(default=None, gt=0)
+    amount_cents: int | None = Field(default=None, gt=0, le=MAX_AMOUNT_CENTS)
     transaction_type: TransactionType | None = None
     description: str | None = Field(default=None, min_length=1, max_length=500)
     occurred_at: datetime | None = None
@@ -53,10 +54,13 @@ class MonthlySummaryResponse(BaseModel):
     income_cents: int
     expense_cents: int
     withdrawal_cents: int
-    operating_balance_cents: int
+    operating_result_cents: int = Field(description="Entradas menos despesas do negócio.")
+    net_after_withdrawals_cents: int = Field(
+        description="Resultado do negócio menos as retiradas pessoais."
+    )
     disclaimer: str = (
-        "O saldo operacional não considera obrigações futuras e não representa automaticamente "
-        "lucro tributável ou valor seguro para retirada."
+        "Os valores não consideram obrigações futuras, reservas ou impostos e não representam "
+        "automaticamente lucro tributável ou valor seguro para retirada."
     )
 
 

@@ -1,8 +1,11 @@
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import Decimal
 from enum import StrEnum
+
+from lucromei.money import AMOUNT_TOKEN, InvalidAmount, parse_brl_amount
 
 
 class TransactionType(StrEnum):
@@ -20,10 +23,40 @@ class ParsedTransaction:
     confidence: Decimal
 
 
-_AMOUNT_RE = re.compile(r"(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)", re.IGNORECASE)
-_INCOME_WORDS = ("recebi", "ganhei", "entrou", "vendi", "fiz")
-_EXPENSE_WORDS = ("gastei", "paguei", "comprei", "custou", "despesa")
-_WITHDRAWAL_WORDS = ("retirei", "tirei", "saquei", "pró-labore", "pro-labore")
+@dataclass(frozen=True, slots=True)
+class PeriodTotals:
+    """Deterministic totals for a period. The only place these figures are defined.
+
+    - operating_result: what the business produced (income minus business expenses).
+    - net_after_withdrawals: what is left after the owner's personal withdrawals.
+
+    Neither value is a guaranteed amount the owner can safely withdraw: future obligations,
+    reserves and taxes are not considered.
+    """
+
+    income_cents: int
+    expense_cents: int
+    withdrawal_cents: int
+
+    @property
+    def operating_result_cents(self) -> int:
+        return self.income_cents - self.expense_cents
+
+    @property
+    def net_after_withdrawals_cents(self) -> int:
+        return self.operating_result_cents - self.withdrawal_cents
+
+
+# A number, optionally preceded by "R$". Lookarounds stop matches inside words or larger numbers.
+_NUMBER_RE = re.compile(rf"(?<![\w])(?P<prefix>r\$\s*)?(?P<number>{AMOUNT_TOKEN})(?![\w])")
+_CURRENCY_SUFFIX_RE = re.compile(r"^\s*(?:reais|real|conto|contos)\b")
+_TOTAL_PRICE_PREFIX_RE = re.compile(r"\bpor\s*$")
+_UNIT_PRICE_PREFIX_RE = re.compile(r"\bde\s*$")
+_EACH_RE = re.compile(r"\bcada\b")
+
+_INCOME_RE = re.compile(r"\b(?:recebi|ganhei|entrou|vendi|fiz)\b")
+_EXPENSE_RE = re.compile(r"\b(?:gastei|paguei|comprei|custou|despesa)\b")
+_WITHDRAWAL_RE = re.compile(r"\b(?:retirei|tirei|saquei|pro[- ]labore)\b")
 
 
 class ParseError(ValueError):
@@ -40,37 +73,32 @@ def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTra
     normalized = " ".join(message.lower().strip().split())
     if not normalized:
         raise ParseError("A mensagem está vazia.")
+    folded = _fold_accents(normalized)
 
     # A payment to a person may be a business expense or a personal withdrawal.
     # The ledger must ask instead of inferring the user's intent.
-    if normalized.startswith("paguei ") and " para " in normalized:
+    if folded.startswith("paguei ") and " para " in folded:
         raise ParseError("Não ficou claro se é entrada, despesa ou retirada pessoal.")
 
-    matches = list(_AMOUNT_RE.finditer(normalized))
-    if len(matches) != 1:
-        raise ParseError("Informe exatamente um valor por mensagem.")
-
     groups = [
-        (TransactionType.INCOME, any(word in normalized for word in _INCOME_WORDS)),
-        (TransactionType.EXPENSE, any(word in normalized for word in _EXPENSE_WORDS)),
-        (TransactionType.WITHDRAWAL, any(word in normalized for word in _WITHDRAWAL_WORDS)),
+        (TransactionType.INCOME, _INCOME_RE.search(folded)),
+        (TransactionType.EXPENSE, _EXPENSE_RE.search(folded)),
+        (TransactionType.WITHDRAWAL, _WITHDRAWAL_RE.search(folded)),
     ]
-    detected = [kind for kind, present in groups if present]
+    detected = [kind for kind, match in groups if match]
     if len(detected) != 1:
         raise ParseError("Não ficou claro se é entrada, despesa ou retirada pessoal.")
 
-    raw_amount = matches[0].group(1).replace(".", "").replace(",", ".")
+    amount_match = _select_amount(normalized)
     try:
-        decimal_amount = Decimal(raw_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    except InvalidOperation as exc:
-        raise ParseError("O valor informado é inválido.") from exc
+        amount_cents = parse_brl_amount(amount_match.group("number"))
+    except InvalidAmount as exc:
+        raise ParseError(str(exc)) from exc
 
-    amount_cents = int(decimal_amount * 100)
-    if amount_cents <= 0:
-        raise ParseError("O valor deve ser maior que zero.")
-
-    description = (normalized[: matches[0].start()] + normalized[matches[0].end() :]).strip(" .,-")
-    description = description or detected[0].value
+    description = (normalized[: amount_match.start()] + normalized[amount_match.end() :]).strip(
+        " .,-"
+    )
+    description = " ".join(description.split()) or detected[0].value
 
     return ParsedTransaction(
         transaction_type=detected[0],
@@ -81,13 +109,42 @@ def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTra
     )
 
 
-def calculate_balance(transactions: list[ParsedTransaction]) -> int:
-    income = sum(
-        t.amount_cents for t in transactions if t.transaction_type is TransactionType.INCOME
+def _select_amount(normalized: str) -> re.Match[str]:
+    """Pick the single number that is the transaction amount.
+
+    One number: it is the amount. Several numbers ("Fiz 3 cortes por 90 reais"): exactly one
+    must be marked as money (R$, "reais", or "por <valor>"); the rest are quantities. A unit
+    price ("3 cortes de 30 reais", "30 cada") is rejected, because the total is not explicit.
+    """
+
+    matches = list(_NUMBER_RE.finditer(normalized))
+    if not matches:
+        raise ParseError("Informe o valor do lançamento.")
+    if len(matches) == 1:
+        return matches[0]
+
+    unit_price_error = "Informe o valor total do lançamento, não o valor de cada item."
+    if _EACH_RE.search(normalized):
+        raise ParseError(unit_price_error)
+    marked = [match for match in matches if _is_money_marked(normalized, match)]
+    if len(marked) != 1:
+        raise ParseError("Informe exatamente um valor por mensagem.")
+    amount = marked[0]
+
+    quantity_before_amount = any(match.start() < amount.start() for match in matches)
+    if quantity_before_amount and _UNIT_PRICE_PREFIX_RE.search(normalized[: amount.start()]):
+        raise ParseError(unit_price_error)
+    return amount
+
+
+def _is_money_marked(normalized: str, match: re.Match[str]) -> bool:
+    return bool(
+        match.group("prefix")
+        or _CURRENCY_SUFFIX_RE.match(normalized[match.end() :])
+        or _TOTAL_PRICE_PREFIX_RE.search(normalized[: match.start()])
     )
-    outflows = sum(
-        t.amount_cents
-        for t in transactions
-        if t.transaction_type in {TransactionType.EXPENSE, TransactionType.WITHDRAWAL}
-    )
-    return income - outflows
+
+
+def _fold_accents(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in decomposed if not unicodedata.combining(char))

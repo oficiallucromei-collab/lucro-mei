@@ -1,9 +1,20 @@
+import hmac
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy.orm import Session
 
-from lucromei.config import get_settings
+from lucromei.config import get_settings, is_configured_secret
 from lucromei.conversation import ConversationService
 from lucromei.db import get_session
 from lucromei.domain import ParseError
@@ -35,6 +46,30 @@ app = FastAPI(
 app.state.whatsapp_sender = MockOutboundSender()
 
 
+def require_internal_api_key(
+    api_key: Annotated[str | None, Header(alias="X-Internal-Api-Key")] = None,
+) -> None:
+    """Guard the /v1 endpoints until real end-user authentication exists.
+
+    They accept any WhatsApp number or transaction ID, so without this guard anyone could read
+    or change any customer's ledger. With no key configured they are disabled (404).
+    """
+
+    expected = get_settings().internal_api_key
+    if not expected:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if api_key is None or not _secrets_match(api_key, expected):
+        raise HTTPException(status_code=401, detail="Chave de acesso interna inválida.")
+
+
+def _secrets_match(received: str, expected: str) -> bool:
+    # Bytes, because compare_digest raises TypeError on non-ASCII str input.
+    return hmac.compare_digest(received.encode(), expected.encode())
+
+
+internal_api = APIRouter(prefix="/v1", dependencies=[Depends(require_internal_api_key)])
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
@@ -42,11 +77,16 @@ def health() -> HealthResponse:
 
 @app.get("/webhooks/whatsapp")
 def verify_whatsapp_webhook(
-    mode: str = Query(alias="hub.mode"),
-    token: str = Query(alias="hub.verify_token"),
-    challenge: str = Query(alias="hub.challenge"),
+    mode: Annotated[str, Query(alias="hub.mode")],
+    token: Annotated[str, Query(alias="hub.verify_token")],
+    challenge: Annotated[str, Query(alias="hub.challenge")],
 ) -> Response:
-    if mode != "subscribe" or not hmac_compare(token, get_settings().whatsapp_verify_token):
+    expected = get_settings().whatsapp_verify_token
+    if (
+        mode != "subscribe"
+        or not is_configured_secret(expected)
+        or not _secrets_match(token, expected)
+    ):
         raise HTTPException(status_code=403, detail="Token de verificação inválido.")
     return Response(content=challenge, media_type="text/plain")
 
@@ -55,7 +95,7 @@ def verify_whatsapp_webhook(
 async def receive_whatsapp_webhook(
     request: Request,
     session: SessionDep,
-    signature: str | None = Header(default=None, alias="X-Hub-Signature-256"),
+    signature: Annotated[str | None, Header(alias="X-Hub-Signature-256")] = None,
 ) -> dict[str, int | bool]:
     body = await request.body()
     try:
@@ -112,13 +152,11 @@ async def receive_whatsapp_webhook(
     }
 
 
-def hmac_compare(left: str, right: str) -> bool:
-    import hmac
-
-    return hmac.compare_digest(left, right)
-
-
-@app.post("/v1/messages", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED)
+@internal_api.post(
+    "/messages",
+    response_model=TransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def process_message(
     payload: InboundMessage,
     session: SessionDep,
@@ -143,8 +181,8 @@ def process_message(
     )
 
 
-@app.post(
-    "/v1/transactions/{transaction_id}/corrections",
+@internal_api.post(
+    "/transactions/{transaction_id}/corrections",
     response_model=TransactionStateResponse,
 )
 def correct_transaction(
@@ -168,8 +206,8 @@ def correct_transaction(
     return _state_response(transaction)
 
 
-@app.post(
-    "/v1/transactions/{transaction_id}/reversal",
+@internal_api.post(
+    "/transactions/{transaction_id}/reversal",
     response_model=TransactionStateResponse,
 )
 def reverse_transaction(
@@ -186,23 +224,27 @@ def reverse_transaction(
     return _state_response(transaction)
 
 
-@app.get("/v1/summaries/monthly", response_model=MonthlySummaryResponse)
+@internal_api.get("/summaries/monthly", response_model=MonthlySummaryResponse)
 def monthly_summary(
     whatsapp_number: str,
     session: SessionDep,
-    year: int = Query(ge=2020, le=2100),
-    month: int = Query(ge=1, le=12),
+    year: Annotated[int, Query(ge=2020, le=2100)],
+    month: Annotated[int, Query(ge=1, le=12)],
 ) -> MonthlySummaryResponse:
     summary = LedgerService(session).monthly_summary(whatsapp_number, year, month)
     return MonthlySummaryResponse(
         whatsapp_number=whatsapp_number,
         period_start=summary.period_start,
         period_end=summary.period_end,
-        income_cents=summary.income_cents,
-        expense_cents=summary.expense_cents,
-        withdrawal_cents=summary.withdrawal_cents,
-        operating_balance_cents=summary.operating_balance_cents,
+        income_cents=summary.totals.income_cents,
+        expense_cents=summary.totals.expense_cents,
+        withdrawal_cents=summary.totals.withdrawal_cents,
+        operating_result_cents=summary.totals.operating_result_cents,
+        net_after_withdrawals_cents=summary.totals.net_after_withdrawals_cents,
     )
+
+
+app.include_router(internal_api)
 
 
 def _state_response(transaction) -> TransactionStateResponse:
