@@ -83,6 +83,11 @@ This initial scaffold includes:
   between 9h and 20h local time, never to accounts being erased; plain text when the window is
   still open; PARAR LEMBRETES / VOLTAR LEMBRETES; off unless
   `LUCROMEI_NOTIFICATIONS_ENABLED` (and `LUCROMEI_REMINDERS_ENABLED`) are true;
+- spreadsheet export and monthly report over WhatsApp: "planilha" (or "planilha do mês
+  passado") sends a CSV document (";" separator, comma decimals, UTF-8 with BOM, formula
+  injection neutralized) built at send time and never stored; "relatório do mês" adds the
+  change from the previous month, the best day and the largest expenses, always without
+  accounting, tax or investment advice;
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
 

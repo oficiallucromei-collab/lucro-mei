@@ -55,6 +55,12 @@ class OutboundSender(Protocol):
         """Send an approved message template (works outside the 24-hour window)."""
         ...
 
+    def send_document(
+        self, recipient: str, filename: str, content: bytes, mime_type: str, caption: str
+    ) -> str | None:
+        """Upload a file and send it as a document."""
+        ...
+
 
 @dataclass(slots=True)
 class SentMessage:
@@ -62,6 +68,8 @@ class SentMessage:
     text: str
     template: str | None = None
     parameters: list[str] | None = None
+    document: bytes | None = None
+    filename: str | None = None
 
 
 @dataclass(slots=True)
@@ -84,6 +92,14 @@ class MockOutboundSender:
                 template=name,
                 parameters=list(parameters),
             )
+        )
+        return f"mock.{len(self.sent_messages)}"
+
+    def send_document(
+        self, recipient: str, filename: str, content: bytes, mime_type: str, caption: str
+    ) -> str:
+        self.sent_messages.append(
+            SentMessage(recipient=recipient, text=caption, document=content, filename=filename)
         )
         return f"mock.{len(self.sent_messages)}"
 
@@ -187,6 +203,7 @@ RETRYABLE_META_ERROR_CODES = frozenset({1, 2, 4, 17, 341, 80007, 130429, 131000,
                                         131056, 133004})
 MAX_TEXT_LENGTH = 4096
 MAX_PARAMETER_LENGTH = 1024
+MAX_CAPTION_LENGTH = 1024
 GRAPH_API_VERSION_RE = re.compile(r"^v\d+\.\d+$")
 
 
@@ -206,7 +223,9 @@ class CloudApiOutboundSender:
             raise ValueError("Credenciais da WhatsApp Cloud API ausentes ou inválidas.")
         if not GRAPH_API_VERSION_RE.fullmatch(graph_api_version):
             raise ValueError("Versão da Graph API inválida.")
-        self._url = f"https://graph.facebook.com/{graph_api_version}/{phone_number_id}/messages"
+        base = f"https://graph.facebook.com/{graph_api_version}/{phone_number_id}"
+        self._url = f"{base}/messages"
+        self._media_url = f"{base}/media"
         self._headers = {"Authorization": f"Bearer {access_token}"}
         self._client = client or httpx.Client(
             timeout=httpx.Timeout(timeout_seconds, connect=min(5.0, timeout_seconds))
@@ -248,6 +267,40 @@ class CloudApiOutboundSender:
                 "to": recipient,
                 "type": "template",
                 "template": template,
+            }
+        )
+
+    def send_document(
+        self, recipient: str, filename: str, content: bytes, mime_type: str, caption: str
+    ) -> str | None:
+        try:
+            upload = self._client.post(
+                self._media_url,
+                data={"messaging_product": "whatsapp", "type": mime_type},
+                files={"file": (filename, content, mime_type)},
+                headers=self._headers,
+            )
+        except httpx.TimeoutException as exc:
+            raise WhatsAppSendError("media_timeout", retryable=True) from exc
+        except httpx.HTTPError as exc:
+            raise WhatsAppSendError("media_network_error", retryable=True) from exc
+        if not upload.is_success:
+            raise _classify_error(upload)
+        try:
+            media_id = upload.json()["id"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise WhatsAppSendError("media_bad_response", retryable=True) from exc
+        return self._post(
+            {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": recipient,
+                "type": "document",
+                "document": {
+                    "id": media_id,
+                    "filename": filename,
+                    "caption": caption[:MAX_CAPTION_LENGTH],
+                },
             }
         )
 

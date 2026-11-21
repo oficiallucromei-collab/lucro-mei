@@ -10,13 +10,23 @@ never re-runs the ledger write. Each step is idempotent:
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from lucromei import ai, batch, clarification, notifications, onboarding, privacy, subscription
+from lucromei import (
+    ai,
+    batch,
+    clarification,
+    notifications,
+    onboarding,
+    privacy,
+    reports,
+    subscription,
+)
 from lucromei.audio import AudioError
 from lucromei.config import get_business_timezone, get_settings
 from lucromei.conversation import ConversationService
@@ -176,6 +186,9 @@ def handle_process_message(session: Session, payload: dict[str, Any], ctx: JobCo
         raise RetryLater(ORDERING_RETRY_SECONDS)
 
     reply = build_reply(session, event, ctx)
+    attachment = None
+    if isinstance(reply, DocumentReply):
+        reply, attachment = reply.caption, reply.attachment.as_dict()
     parts = [reply] if isinstance(reply, str) else reply
     for index, text in enumerate(parts, 1):
         queue_reply(
@@ -185,12 +198,21 @@ def handle_process_message(session: Session, payload: dict[str, Any], ctx: JobCo
             text=text,
             max_attempts=ctx.services["max_attempts"],
             now=ctx.now,
+            attachment=attachment,
         )
     event.status = "processed"
     event.processed_at = ctx.now
 
 
-def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str | list[str]:
+@dataclass(frozen=True, slots=True)
+class DocumentReply:
+    caption: str
+    attachment: reports.Attachment
+
+
+def build_reply(
+    session: Session, event: InboundEvent, ctx: JobContext
+) -> str | list[str] | DocumentReply:
     """The reply to one message: a single text, or several parts sent in order."""
     if event.text is None:
         return TEXT_ONLY_REPLY
@@ -223,6 +245,13 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
     )
     if subscription_reply is not None:
         return subscription_reply
+    today = reports.local_today(event.sent_at, get_business_timezone())
+    if (attachment := reports.match_spreadsheet(event.text, today)) is not None:
+        return DocumentReply(
+            reports.spreadsheet_caption(attachment.year, attachment.month), attachment
+        )
+    if (period := reports.match_report(event.text, today)) is not None:
+        return reports.monthly_report(session, business, *period, get_business_timezone())
     if not subscription.has_access(session, business, ctx.now, settings):
         # Soft block: queries, corrections and help still work; new entries wait for ASSINAR.
         command = ConversationService(session).handle(
@@ -449,6 +478,7 @@ def queue_reply(
     now: datetime,
     template: Template | None = None,
     template_params: list[str] | None = None,
+    attachment: dict[str, Any] | None = None,
 ) -> bool:
     """Queue one outbound message, once per `in_reply_to`. Returns True if it was new."""
     outbound_id = new_id()
@@ -460,6 +490,8 @@ def queue_reply(
         "status": "queued",
         "created_at": now,
     }
+    if attachment is not None:
+        values["attachment"] = attachment
     if template is not None:
         values.update(
             template_name=template.name,
@@ -494,7 +526,12 @@ def handle_send_message(session: Session, payload: dict[str, Any], ctx: JobConte
         raise RetryLater(1.0)  # parts of a long reply go out in order
     sender: OutboundSender = ctx.services["sender"]
     try:
-        if outbound.template_name:
+        if outbound.attachment:
+            filename, content = _build_attachment(session, outbound)
+            provider_message_id = sender.send_document(
+                outbound.recipient, filename, content, "text/csv", outbound.text
+            )
+        elif outbound.template_name:
             provider_message_id = sender.send_template(
                 outbound.recipient,
                 outbound.template_name,
@@ -513,6 +550,20 @@ def handle_send_message(session: Session, payload: dict[str, Any], ctx: JobConte
     outbound.provider_message_id = provider_message_id
     outbound.error_code = None
     outbound.sent_at = ctx.now
+
+
+def _build_attachment(session: Session, outbound: OutboundMessage) -> tuple[str, bytes]:
+    spec = outbound.attachment or {}
+    if spec.get("kind") != "ledger_csv":
+        raise PermanentJobError("unknown_attachment")
+    business = session.scalar(
+        select(Business).where(Business.whatsapp_number == outbound.recipient)
+    )
+    if business is None:
+        raise PermanentJobError("attachment_business_missing")
+    year, month = int(spec["year"]), int(spec["month"])
+    content = reports.ledger_csv(session, business, year, month, get_business_timezone())
+    return reports.csv_filename(year, month), content
 
 
 def _part_key(external_id: str, index: int) -> str:

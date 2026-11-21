@@ -155,6 +155,9 @@ class OutboundMessage(Base):
     template_name: Mapped[str | None] = mapped_column(String(64))
     template_language: Mapped[str | None] = mapped_column(String(10))
     template_params: Mapped[list[str] | None] = mapped_column(JSON(none_as_null=True))
+    # A document built when the message is sent, e.g. {"kind": "ledger_csv", "year", "month"};
+    # `text` is then its caption. The file itself is never stored.
+    attachment: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True))
     # queued -> sent, or failed when sending gave up.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     provider_message_id: Mapped[str | None] = mapped_column(String(255), unique=True)
