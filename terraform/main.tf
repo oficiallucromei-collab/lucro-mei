@@ -40,6 +40,9 @@ locals {
     LUCROMEI_WHATSAPP_APP_SECRET   = "lucromei-whatsapp-app-secret"
     LUCROMEI_WHATSAPP_VERIFY_TOKEN = "lucromei-whatsapp-verify-token"
     LUCROMEI_INTERNAL_API_KEY      = "lucromei-internal-api-key"
+    # HMAC key for the anonymous proof kept after an LGPD deletion. Payload added in Secret
+    # Manager, never in Terraform.
+    LUCROMEI_PRIVACY_HASH_KEY = "lucromei-privacy-hash-key"
   }
 
   # Versions in use when they are not 1. var.secret_versions overrides these per release.
@@ -195,6 +198,12 @@ resource "google_cloud_run_v2_service" "test" {
       env {
         name  = "SSL_CERT_FILE"
         value = "/etc/ssl/certs/ca-certificates.crt"
+      }
+
+      env {
+        # Placeholder for the test service only. Real terms must be published before customers.
+        name  = "LUCROMEI_TERMS_URL"
+        value = var.terms_url
       }
 
       dynamic "env" {

@@ -20,11 +20,23 @@ variable "secret_versions" {
       contains([
         "LUCROMEI_DATABASE_URL",
         "LUCROMEI_INTERNAL_API_KEY",
+        "LUCROMEI_PRIVACY_HASH_KEY",
         "LUCROMEI_WHATSAPP_ACCESS_TOKEN",
         "LUCROMEI_WHATSAPP_APP_SECRET",
         "LUCROMEI_WHATSAPP_VERIFY_TOKEN",
       ], name) && can(regex("^[1-9][0-9]*$", version))
     ])
     error_message = "Specify known Cloud Run secret environment variable names and positive numeric version strings."
+  }
+}
+
+variable "terms_url" {
+  description = "Public https link to the terms of use shown during onboarding."
+  type        = string
+  default     = "https://lucromei.example/termos-provisorio"
+
+  validation {
+    condition     = can(regex("^https://", var.terms_url))
+    error_message = "The terms URL must use https."
   }
 }
