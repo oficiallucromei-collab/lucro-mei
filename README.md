@@ -121,7 +121,54 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
 
 ## Roadmap
 
-1. Subscription portal and billing (the trial is recorded, not yet enforced).
+Fases 0 e 1 (PRs #1 a #9) e as partes de LGPD e release de teste da Fase 2 (PRs #10 a #14)
+estão no `main`. Nada abaixo deve enviar mensagens reais, ativar cobrança ou mexer em
+produção sem autorização explícita do dono do produto.
+
+### Fase 2: WhatsApp pronto para um piloto
+
+1. **Teste real controlado** no `lucromei-test`, com o celular do dono: onboarding,
+   lançamento, pergunta de esclarecimento, desfazer, resumo, mensagem repetida, áudio (se
+   ligado), "meus dados" e pedido e cancelamento de exclusão, conferindo logs, status de
+   entrega e banco.
+2. **Pendências de segurança**: trocar a senha do dono do banco Neon de teste; desativar a
+   versão antiga do token do WhatsApp; remover o papel antigo `cloudbuild.connectionViewer`
+   da conta operadora (feito pelo dono do projeto), mantendo `iam.securityReviewer`.
+3. **Termos e privacidade**: publicar os termos de uso reais (hoje `terms_url` é uma URL
+   fictícia) e atualizar a política de privacidade com os prazos (90 dias de texto, 7 dias de
+   carência para exclusão), os comandos MEUS DADOS e APAGAR MEUS DADOS, e os operadores
+   Anthropic (fallback de IA) e OpenAI (transcrição de áudio).
+4. **Templates da Meta** para mensagens fora da janela de 24 horas: aviso de fim do teste
+   grátis e lembretes.
+5. **Mais utilidade no dia a dia**: "últimos lançamentos", resumo semanal ("quanto ganhei
+   essa semana?"), lançamentos com data passada ("ontem recebi 200") e vários lançamentos
+   numa mensagem, com prévia, confirmação e gravação numa única transação.
+6. **Fim do teste e assinatura**: bloqueio suave depois dos 14 dias e fluxo de pagamento
+   preparado, sem ativar cobrança.
+
+### Fase 3: produção e primeiros clientes pagantes
+
+1. **Ambiente de produção separado**: serviço `lucromei-prod`, banco Neon de produção (o
+   segredo `lucromei-database-url` já existe), número oficial do WhatsApp com o negócio
+   verificado na Meta, e promoção manual e aprovada de teste para produção (o teste recebe
+   deploy automático a cada merge).
+2. **Backups e recuperação**: restauração a um ponto no tempo no Neon, teste de restauração
+   documentado e regra de como a exclusão da LGPD trata os backups.
+3. **Monitoramento e alertas**: Sentry ligado; alertas para jobs `dead`, erros 5xx, falhas de
+   entrega da Meta e atraso da fila; verificação externa de disponibilidade.
+4. **Cobrança real**: portar o Stripe da branch `codex/production-deployment`, com webhooks
+   assinados e idempotentes; ativar só com autorização.
+5. **Aquisição**: portar landing page, atribuição de campanhas e funil de growth da mesma
+   branch, renumerando as migrações (ela usa o ID `20261120_0003`, já ocupado) e reaproveitando
+   o onboarding e o teste grátis da Fase 1.
+6. **Segurança e conformidade**: revisão de segurança, limite de requisições no webhook,
+   rotação periódica de segredos e revisão do app pela Meta.
+7. **Escala**: limpeza de retenção em lotes, mais de uma instância (a fila já suporta
+   workers concorrentes) e worker separado do serviço web.
+8. **Operação e suporte**: runbook de incidentes, canal de suporte para o usuário e
+   ferramentas internas de consulta.
+9. **Valor para o MEI**: exportação em planilha e relatórios mensais mais ricos, sempre sem
+   orientação contábil, fiscal ou de investimentos.
 
 
 ## Áudios recebidos pelo WhatsApp
