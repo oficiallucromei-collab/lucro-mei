@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from lucromei import ai, batch, clarification, onboarding, privacy, subscription
+from lucromei import ai, batch, clarification, notifications, onboarding, privacy, subscription
 from lucromei.audio import AudioError
 from lucromei.config import get_business_timezone, get_settings
 from lucromei.conversation import ConversationService
@@ -31,6 +31,7 @@ from lucromei.models import (
     new_id,
 )
 from lucromei.service import EffectiveTransaction, LedgerService
+from lucromei.templates import Template
 from lucromei.whatsapp import (
     OutboundSender,
     WhatsAppSendError,
@@ -446,22 +447,28 @@ def queue_reply(
     text: str,
     max_attempts: int,
     now: datetime,
-) -> None:
+    template: Template | None = None,
+    template_params: list[str] | None = None,
+) -> bool:
+    """Queue one outbound message, once per `in_reply_to`. Returns True if it was new."""
     outbound_id = new_id()
-    created = insert_ignore(
-        session,
-        OutboundMessage,
-        {
-            "id": outbound_id,
-            "recipient": recipient,
-            "in_reply_to": in_reply_to,
-            "text": text,
-            "status": "queued",
-            "created_at": now,
-        },
-    )
+    values = {
+        "id": outbound_id,
+        "recipient": recipient,
+        "in_reply_to": in_reply_to,
+        "text": text,
+        "status": "queued",
+        "created_at": now,
+    }
+    if template is not None:
+        values.update(
+            template_name=template.name,
+            template_language=template.language,
+            template_params=list(template_params or []),
+        )
+    created = insert_ignore(session, OutboundMessage, values)
     if not created:
-        return  # This message already has a reply.
+        return False  # This message already has a reply.
     enqueue(
         session,
         SEND_MESSAGE,
@@ -470,6 +477,7 @@ def queue_reply(
         max_attempts=max_attempts,
         run_after=now,
     )
+    return True
 
 
 def handle_send_message(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
@@ -486,7 +494,15 @@ def handle_send_message(session: Session, payload: dict[str, Any], ctx: JobConte
         raise RetryLater(1.0)  # parts of a long reply go out in order
     sender: OutboundSender = ctx.services["sender"]
     try:
-        provider_message_id = sender.send_text(outbound.recipient, outbound.text)
+        if outbound.template_name:
+            provider_message_id = sender.send_template(
+                outbound.recipient,
+                outbound.template_name,
+                outbound.template_language or "pt_BR",
+                list(outbound.template_params or []),
+            )
+        else:
+            provider_message_id = sender.send_text(outbound.recipient, outbound.text)
     except WhatsAppSendError as exc:
         # The transaction is rolled back on failure; the code is kept on the job and copied to
         # the message by mark_outbound_failed if sending gives up.
@@ -539,6 +555,20 @@ def handle_maintenance(session: Session, payload: dict[str, Any], ctx: JobContex
             max_attempts=ctx.services["max_attempts"],
             run_after=ctx.now,
         )
+    queued = 0
+    for notice in notifications.due_notices(session, ctx.now, settings):
+        queued += queue_reply(
+            session,
+            recipient=notice.recipient,
+            in_reply_to=notice.key,
+            text=notice.text,
+            max_attempts=ctx.services["max_attempts"],
+            now=ctx.now,
+            template=notice.template if notice.use_template else None,
+            template_params=notice.parameters,
+        )
+    if queued:
+        logger.info("notices_queued", extra={"outcome": str(queued)})
     purged = privacy.purge_old_text(session, ctx.now, settings)
     summary = ",".join(f"{table}={count}" for table, count in purged.items())
     logger.info("retention_purge", extra={"outcome": summary})

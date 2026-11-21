@@ -49,11 +49,19 @@ class OutboundSender(Protocol):
         """Send a text message and return WhatsApp's ID for it, when known."""
         ...
 
+    def send_template(
+        self, recipient: str, name: str, language: str, parameters: list[str]
+    ) -> str | None:
+        """Send an approved message template (works outside the 24-hour window)."""
+        ...
+
 
 @dataclass(slots=True)
 class SentMessage:
     recipient: str
     text: str
+    template: str | None = None
+    parameters: list[str] | None = None
 
 
 @dataclass(slots=True)
@@ -64,6 +72,19 @@ class MockOutboundSender:
 
     def send_text(self, recipient: str, text: str) -> str:
         self.sent_messages.append(SentMessage(recipient=recipient, text=text))
+        return f"mock.{len(self.sent_messages)}"
+
+    def send_template(
+        self, recipient: str, name: str, language: str, parameters: list[str]
+    ) -> str:
+        self.sent_messages.append(
+            SentMessage(
+                recipient=recipient,
+                text=f"[template {name}] " + " | ".join(parameters),
+                template=name,
+                parameters=list(parameters),
+            )
+        )
         return f"mock.{len(self.sent_messages)}"
 
 
@@ -165,6 +186,7 @@ def format_confirmation(
 RETRYABLE_META_ERROR_CODES = frozenset({1, 2, 4, 17, 341, 80007, 130429, 131000, 131016, 131048,
                                         131056, 133004})
 MAX_TEXT_LENGTH = 4096
+MAX_PARAMETER_LENGTH = 1024
 GRAPH_API_VERSION_RE = re.compile(r"^v\d+\.\d+$")
 
 
@@ -194,13 +216,42 @@ class CloudApiOutboundSender:
         return "CloudApiOutboundSender()"
 
     def send_text(self, recipient: str, text: str) -> str | None:
-        body = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": recipient,
-            "type": "text",
-            "text": {"preview_url": False, "body": text[:MAX_TEXT_LENGTH]},
-        }
+        return self._post(
+            {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": recipient,
+                "type": "text",
+                "text": {"preview_url": False, "body": text[:MAX_TEXT_LENGTH]},
+            }
+        )
+
+    def send_template(
+        self, recipient: str, name: str, language: str, parameters: list[str]
+    ) -> str | None:
+        template: dict[str, Any] = {"name": name, "language": {"code": language}}
+        if parameters:
+            template["components"] = [
+                {
+                    "type": "body",
+                    # Meta rejects empty parameters and newlines in template variables.
+                    "parameters": [
+                        {"type": "text", "text": _template_parameter(value)}
+                        for value in parameters
+                    ],
+                }
+            ]
+        return self._post(
+            {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": recipient,
+                "type": "template",
+                "template": template,
+            }
+        )
+
+    def _post(self, body: dict[str, Any]) -> str | None:
         try:
             response = self._client.post(self._url, json=body, headers=self._headers)
         except httpx.TimeoutException as exc:
@@ -221,6 +272,10 @@ class CloudApiOutboundSender:
 
     def close(self) -> None:
         self._client.close()
+
+
+def _template_parameter(value: str) -> str:
+    return " ".join(value.split())[:MAX_PARAMETER_LENGTH] or "-"
 
 
 def _classify_error(response: httpx.Response) -> WhatsAppSendError:

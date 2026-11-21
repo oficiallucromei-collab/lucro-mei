@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from lucromei import notifications
 from lucromei.domain import PeriodTotals, TransactionType
 from lucromei.models import CommandReceipt
 from lucromei.money import InvalidAmount, format_brl, parse_brl_amount
@@ -97,7 +98,7 @@ HELP_TEXT = (
     "• últimos lançamentos\n\n"
     "Correções: DESFAZER apaga o último lançamento e CORRIGIR PARA 120 muda o valor dele.\n"
     "Privacidade: MEUS DADOS mostra tudo o que guardo e APAGAR MEUS DADOS apaga sua conta.\n"
-    "Assinatura: mande ASSINAR."
+    "Assinatura: mande ASSINAR. Para não receber lembretes, mande PARAR LEMBRETES."
 )
 _MONTH_NAMES = (
     "janeiro",
@@ -187,6 +188,13 @@ class ConversationService:
             command_type = "list"
             recent = self.ledger.recent_transactions(whatsapp_number, RECENT_LIMIT)
             reply = format_recent(recent, self.ledger.tz)
+        elif (
+            reminder_reply := notifications.handle_opt_out(
+                self.ledger.get_or_create_business(whatsapp_number), normalized, now or _utc_now()
+            )
+        ) is not None:
+            command_type = "reminders"
+            reply = reminder_reply
         elif normalized.rstrip(" ?!.") in _HELP_COMMANDS:
             command_type = "help"
             reply = HELP_TEXT
@@ -296,6 +304,10 @@ def format_recent(items: list[EffectiveTransaction], tz: ZoneInfo) -> str:
         )
     lines += ["", "Para desfazer o último, mande DESFAZER."]
     return "\n".join(lines)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _short(day: date) -> str:

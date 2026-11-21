@@ -44,6 +44,8 @@ class Business(Base):
     )
     trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when the user answered PARAR LEMBRETES. Service notices (trial end) still go out.
+    reminders_opt_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class TermsAcceptance(Base):
@@ -148,6 +150,11 @@ class OutboundMessage(Base):
     recipient: Mapped[str] = mapped_column(String(32), nullable=False)
     in_reply_to: Mapped[str | None] = mapped_column(String(255), unique=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Set for proactive notices sent outside the 24-hour window: an approved Meta template and
+    # its parameters. `text` then holds the rendered wording, for support and MEUS DADOS.
+    template_name: Mapped[str | None] = mapped_column(String(64))
+    template_language: Mapped[str | None] = mapped_column(String(10))
+    template_params: Mapped[list[str] | None] = mapped_column(JSON(none_as_null=True))
     # queued -> sent, or failed when sending gave up.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     provider_message_id: Mapped[str | None] = mapped_column(String(255), unique=True)
