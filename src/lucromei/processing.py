@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from lucromei import ai, batch, clarification, onboarding, privacy
+from lucromei import ai, batch, clarification, onboarding, privacy, subscription
 from lucromei.audio import AudioError
 from lucromei.config import get_business_timezone, get_settings
 from lucromei.conversation import ConversationService
@@ -212,6 +212,28 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
             settings=get_settings(),
         )
     settings = get_settings()
+    subscription_reply = subscription.handle(
+        session,
+        business,
+        text=event.text,
+        now=ctx.now,
+        settings=settings,
+        checkout=ctx.services.get("checkout"),
+    )
+    if subscription_reply is not None:
+        return subscription_reply
+    if not subscription.has_access(session, business, ctx.now, settings):
+        # Soft block: queries, corrections and help still work; new entries wait for ASSINAR.
+        command = ConversationService(session).handle(
+            message_id=event.external_id,
+            whatsapp_number=event.sender,
+            text=event.text,
+            now=_aware(event.sent_at),
+            commit=False,
+        )
+        return command.reply if command is not None else subscription.blocked_reply(
+            business, settings
+        )
     pending, expired = clarification.current_pending(session, business, ctx.now)
     if pending is not None and pending.kind == batch.BATCH:
         confirmed = clarification.parse_confirmation(event.text)

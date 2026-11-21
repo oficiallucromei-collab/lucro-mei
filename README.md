@@ -72,6 +72,11 @@ This initial scaffold includes:
 - terms of use and privacy policy in plain Portuguese, served by the app at `/termos` and
   `/privacidade` (`legal.py`), with the retention, grace and trial figures taken from the same
   settings the code uses; bump `LUCROMEI_TERMS_VERSION` whenever the text changes;
+- end of the free trial: after `trial_ends_at`, without an active subscription, new entries
+  are softly blocked (summaries, recent entries, undo/corrections, help and the privacy
+  commands keep working); "ASSINAR" records the request in `subscriptions` and, only when a
+  payment provider is configured, answers with its checkout link; nothing is charged here;
+  `LUCROMEI_TRIAL_ENFORCEMENT_ENABLED` and `LUCROMEI_SUBSCRIPTION_PRICE_CENTS` (2490);
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
 
@@ -136,7 +141,7 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
 
 ## Roadmap
 
-1. Subscription portal and billing (the trial is recorded, not yet enforced).
+1. Subscription portal and billing (the trial is enforced softly; no payment provider yet).
 
 
 ## Áudios recebidos pelo WhatsApp

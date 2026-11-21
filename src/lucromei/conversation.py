@@ -96,7 +96,8 @@ HELP_TEXT = (
     "• resumo de hoje / da semana / do mês\n"
     "• últimos lançamentos\n\n"
     "Correções: DESFAZER apaga o último lançamento e CORRIGIR PARA 120 muda o valor dele.\n"
-    "Privacidade: MEUS DADOS mostra tudo o que guardo e APAGAR MEUS DADOS apaga sua conta."
+    "Privacidade: MEUS DADOS mostra tudo o que guardo e APAGAR MEUS DADOS apaga sua conta.\n"
+    "Assinatura: mande ASSINAR."
 )
 _MONTH_NAMES = (
     "janeiro",
