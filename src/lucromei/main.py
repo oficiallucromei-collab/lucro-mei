@@ -77,8 +77,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.worker = None
 
 
+def openapi_url_for(environment: str) -> str | None:
+    """Publish the schema (and with it /docs and /redoc) only for local development."""
+
+    return "/openapi.json" if environment.strip().lower() == "local" else None
+
+
 app = FastAPI(
     title="LucroMEI API",
+    openapi_url=openapi_url_for(get_settings().environment),
     version="0.4.0",
     description="WhatsApp-first financial assistant for Brazilian microentrepreneurs.",
     lifespan=lifespan,
