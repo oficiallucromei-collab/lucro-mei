@@ -40,6 +40,11 @@ This initial scaffold includes:
   kept as a pending entry and the user is asked whether it is a business expense or a personal
   withdrawal; the transaction is recorded only after the answer, and questions expire after
   `LUCROMEI_PENDING_ENTRY_TTL_HOURS` (24 by default);
+- optional AI fallback (`claude-haiku-5-5`, structured JSON output) for messages the rules
+  cannot read: the answer is re-validated with the same rules (amount must be typed by the user
+  and pass `parse_brl_amount`, type within the enum), the description comes from the user's own
+  text, and every suggestion must be confirmed with SIM before it is recorded; usage, tokens and
+  cost (integer micro-dollars) are stored in `ai_usage`, never the message text;
 - onboarding on first contact: name, type of business, acceptance of the terms (version and
   date stored in `terms_acceptances`) and the start of a 14-day free trial; nothing is written
   to the ledger before the terms are accepted;
@@ -107,6 +112,5 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
 
 ## Roadmap
 
-2. Structured AI fallback for messages that deterministic rules cannot classify.
 3. Subscription portal and billing (the trial is recorded, not yet enforced).
 

@@ -197,14 +197,18 @@ def question(pending: PendingEntry) -> str:
             f"Entendi assim: {label} de {amount} ({pending.description}).\n\n"
             "Posso anotar? Responda SIM para anotar ou NÃO para cancelar."
         )
-    options = " ou ".join(TYPE_LABELS[candidate] for candidate in candidates)
-    numbered = " ou ".join(
-        f"{index} para {TYPE_LABELS[candidate]}" for index, candidate in enumerate(candidates, 1)
+    options = _join_options([TYPE_LABELS[candidate] for candidate in candidates])
+    numbered = _join_options(
+        [f"{index} para {TYPE_LABELS[candidate]}" for index, candidate in enumerate(candidates, 1)]
     )
     return (
         f"Antes de anotar {amount} ({pending.description}), me diz: é {options}?\n\n"
         f"Responda {numbered}."
     )
+
+
+def _join_options(options: list[str]) -> str:
+    return options[0] if len(options) == 1 else ", ".join(options[:-1]) + " ou " + options[-1]
 
 
 def _aware(value: datetime) -> datetime:

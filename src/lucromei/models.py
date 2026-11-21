@@ -235,3 +235,22 @@ class PendingEntry(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolution_message_id: Mapped[str | None] = mapped_column(String(255))
     transaction_id: Mapped[str | None] = mapped_column(ForeignKey("transactions.id"))
+
+
+class AIUsage(Base):
+    """One call to the AI fallback: tokens, cost and outcome. Never the message text."""
+
+    __tablename__ = "ai_usage"
+    __table_args__ = (Index("ix_ai_usage_business_created", "business_id", "created_at"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    inbound_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Millionths of a US dollar, rounded up. Integer, like every other amount.
+    cost_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # understood | not_a_transaction | rejected | refused | error
+    outcome: Mapped[str] = mapped_column(String(30), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

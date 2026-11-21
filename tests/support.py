@@ -62,6 +62,9 @@ def reset_state() -> None:
     settings.terms_version = "2026-11-20"
     settings.terms_url = "https://lucromei.example/termos"
     settings.trial_days = 14
+    settings.ai_api_key = ""  # tests never call a real model
+    settings.ai_daily_calls_per_business = 30
+    settings.ai_max_input_chars = 300
     app.state.whatsapp_sender = MockOutboundSender()
     app.state.worker = None
 
