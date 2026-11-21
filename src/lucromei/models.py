@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -197,3 +198,40 @@ class DeliveryStatusEvent(Base):
     error_code: Mapped[str | None] = mapped_column(String(64))
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PendingEntry(Base):
+    """A transaction waiting for the user to confirm its type before it is recorded.
+
+    Nothing reaches the ledger until the user answers. At most one entry per business is open
+    at a time; a newer ambiguous message replaces the older question.
+    """
+
+    __tablename__ = "pending_entries"
+    __table_args__ = (
+        CheckConstraint("amount_cents > 0", name="ck_pending_entries_positive_amount"),
+        Index(
+            "uq_pending_entries_one_open_per_business",
+            "business_id",
+            unique=True,
+            postgresql_where=sql_text("status = 'open'"),
+            sqlite_where=sql_text("status = 'open'"),
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    source_message_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    candidate_types: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # "rules" (deterministic parser) or "ai" (AI fallback, always confirmed by the user).
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="rules")
+    # open -> resolved | cancelled | expired | replaced
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_message_id: Mapped[str | None] = mapped_column(String(255))
+    transaction_id: Mapped[str | None] = mapped_column(ForeignKey("transactions.id"))

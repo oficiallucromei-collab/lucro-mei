@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     terms_version: str = "2026-11-20"
     terms_url: str = ""
     trial_days: int = 14
+    # How long a question such as "despesa ou retirada?" stays open before it expires.
+    pending_entry_ttl_hours: int = 24
     # Background worker that processes received messages and sends replies. "embedded" runs it
     # inside the web process; "off" leaves it to `python -m lucromei.worker`.
     worker_mode: str = "embedded"

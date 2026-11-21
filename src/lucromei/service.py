@@ -15,7 +15,13 @@ from lucromei.domain import (
     TransactionType,
     parse_transaction,
 )
-from lucromei.models import Business, InboundMessage, Transaction, TransactionEvent
+from lucromei.models import (
+    Business,
+    InboundMessage,
+    PendingEntry,
+    Transaction,
+    TransactionEvent,
+)
 
 
 class LedgerError(ValueError):
@@ -144,6 +150,52 @@ class LedgerService:
             whatsapp_number,
             effective_transaction(transaction),
         )
+
+    def record_pending(
+        self,
+        pending: PendingEntry,
+        transaction_type: TransactionType,
+        *,
+        resolution_message_id: str,
+    ) -> EffectiveTransaction:
+        """Record a pending entry once the user has confirmed its type. Does not commit.
+
+        The original message ID stays the idempotency key, so a pending entry can produce at
+        most one transaction. The created event records which message confirmed it.
+        """
+        if existing := self._find_message(pending.source_message_id):
+            return effective_transaction(existing.transaction)
+        business = self.session.get(Business, pending.business_id)
+        if not onboarding.is_active(business):
+            raise onboarding.OnboardingRequired("O cadastro não está concluído.")
+        if transaction_type.value not in pending.candidate_types:
+            raise LedgerError("Tipo de lançamento não oferecido ao usuário.")
+        inbound = InboundMessage(
+            external_id=pending.source_message_id,
+            business_id=business.id,
+            raw_text=pending.source_text,
+        )
+        transaction = Transaction(
+            business_id=business.id,
+            source_message=inbound,
+            transaction_type=transaction_type.value,
+            amount_cents=pending.amount_cents,
+            description=pending.description,
+            occurred_at=pending.occurred_at,
+        )
+        snapshot = {
+            "transaction_type": transaction_type.value,
+            "amount_cents": pending.amount_cents,
+            "description": pending.description,
+            "occurred_at": pending.occurred_at.isoformat(),
+            "pending_entry_id": pending.id,
+            "confirmed_by_message_id": resolution_message_id,
+            "origin": pending.origin,
+        }
+        transaction.events.append(TransactionEvent(event_type="created", changes=snapshot))
+        self.session.add(transaction)
+        self.session.flush()
+        return effective_transaction(transaction)
 
     def correct(
         self,

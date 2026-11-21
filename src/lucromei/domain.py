@@ -63,6 +63,23 @@ class ParseError(ValueError):
     """Raised when a message cannot be safely converted into a transaction."""
 
 
+class AmbiguousTransaction(ParseError):
+    """The amount is clear but the type is not: the user must choose among the candidates."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        amount_cents: int,
+        description: str,
+        candidates: tuple[TransactionType, ...],
+    ) -> None:
+        super().__init__(message)
+        self.amount_cents = amount_cents
+        self.description = description
+        self.candidates = candidates
+
+
 def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTransaction:
     """Parse high-confidence Portuguese transaction messages without an LLM.
 
@@ -78,7 +95,13 @@ def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTra
     # A payment to a person may be a business expense or a personal withdrawal.
     # The ledger must ask instead of inferring the user's intent.
     if folded.startswith("paguei ") and " para " in folded:
-        raise ParseError("Não ficou claro se é entrada, despesa ou retirada pessoal.")
+        amount_cents, description = _amount_and_description(normalized, "pagamento")
+        raise AmbiguousTransaction(
+            "Não ficou claro se é despesa do negócio ou retirada pessoal.",
+            amount_cents=amount_cents,
+            description=description,
+            candidates=(TransactionType.EXPENSE, TransactionType.WITHDRAWAL),
+        )
 
     groups = [
         (TransactionType.INCOME, _INCOME_RE.search(folded)),
@@ -89,16 +112,7 @@ def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTra
     if len(detected) != 1:
         raise ParseError("Não ficou claro se é entrada, despesa ou retirada pessoal.")
 
-    amount_match = _select_amount(normalized)
-    try:
-        amount_cents = parse_brl_amount(amount_match.group("number"))
-    except InvalidAmount as exc:
-        raise ParseError(str(exc)) from exc
-
-    description = (normalized[: amount_match.start()] + normalized[amount_match.end() :]).strip(
-        " .,-"
-    )
-    description = " ".join(description.split()) or detected[0].value
+    amount_cents, description = _amount_and_description(normalized, detected[0].value)
 
     return ParsedTransaction(
         transaction_type=detected[0],
@@ -107,6 +121,18 @@ def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTra
         occurred_at=now or datetime.now(UTC),
         confidence=Decimal("1.00"),
     )
+
+
+def _amount_and_description(normalized: str, fallback: str) -> tuple[int, str]:
+    amount_match = _select_amount(normalized)
+    try:
+        amount_cents = parse_brl_amount(amount_match.group("number"))
+    except InvalidAmount as exc:
+        raise ParseError(str(exc)) from exc
+    description = (normalized[: amount_match.start()] + normalized[amount_match.end() :]).strip(
+        " .,-"
+    )
+    return amount_cents, " ".join(description.split())[:500] or fallback
 
 
 def _select_amount(normalized: str) -> re.Match[str]:
