@@ -11,6 +11,7 @@ substitutions:
   _REGION: southamerica-east1
   _SERVICE: lucromei-test
   _MIGRATE_JOB: lucromei-migrate
+  _OPS_JOB: lucromei-ops
 
 steps:
   - id: validate-release
@@ -78,6 +79,10 @@ steps:
         [[ "$_DEPLOY" == "true" ]] || { echo "Skipping: _DEPLOY=$_DEPLOY"; exit 0; }
         image="$$(cat /workspace/image-digest)"
         gcloud run services update $_SERVICE --region=$_REGION --image="$$image" --quiet
+        # Operator tools follow the release; skipped where the job does not exist.
+        if gcloud run jobs describe $_OPS_JOB --region=$_REGION >/dev/null 2>&1; then
+          gcloud run jobs update $_OPS_JOB --region=$_REGION --image="$$image" --quiet
+        fi
         url="$$(gcloud run services describe $_SERVICE --region=$_REGION --format='value(status.url)')"
         for attempt in 1 2 3 4 5; do
           curl -fsS "$$url/health" && exit 0
