@@ -1,11 +1,17 @@
 import hmac
+import logging
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any, Protocol
 
+import httpx
+
 from lucromei.config import is_configured_secret
 from lucromei.money import format_brl
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidWebhookSignature(ValueError):
@@ -135,7 +141,139 @@ def format_confirmation(transaction_type: str, amount_cents: int) -> str:
     return f"{labels[transaction_type]} registrada: {amount}. Responda 'desfazer' para corrigir."
 
 
-def build_sender(settings: Any) -> OutboundSender:
-    """The sender used outside tests. Replaced by the real Cloud API sender when configured."""
+# Meta error codes worth retrying: throttling and temporary platform errors. Everything else in a
+# 4xx response (invalid number, closed 24-hour window, bad token, bad parameter) will fail again.
+# https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes
+RETRYABLE_META_ERROR_CODES = frozenset({1, 2, 4, 17, 341, 80007, 130429, 131000, 131016, 131048,
+                                        131056, 133004})
+MAX_TEXT_LENGTH = 4096
+GRAPH_API_VERSION_RE = re.compile(r"^v\d+\.\d+$")
 
+
+class CloudApiOutboundSender:
+    """Sends messages through the WhatsApp Cloud API (graph.facebook.com)."""
+
+    def __init__(
+        self,
+        *,
+        access_token: str,
+        phone_number_id: str,
+        graph_api_version: str = "v25.0",
+        timeout_seconds: float = 10.0,
+        client: httpx.Client | None = None,
+    ) -> None:
+        if not access_token or not phone_number_id.isdigit():
+            raise ValueError("Credenciais da WhatsApp Cloud API ausentes ou inválidas.")
+        if not GRAPH_API_VERSION_RE.fullmatch(graph_api_version):
+            raise ValueError("Versão da Graph API inválida.")
+        self._url = f"https://graph.facebook.com/{graph_api_version}/{phone_number_id}/messages"
+        self._headers = {"Authorization": f"Bearer {access_token}"}
+        self._client = client or httpx.Client(
+            timeout=httpx.Timeout(timeout_seconds, connect=min(5.0, timeout_seconds))
+        )
+
+    def __repr__(self) -> str:  # never show the token
+        return "CloudApiOutboundSender()"
+
+    def send_text(self, recipient: str, text: str) -> str | None:
+        body = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "text",
+            "text": {"preview_url": False, "body": text[:MAX_TEXT_LENGTH]},
+        }
+        try:
+            response = self._client.post(self._url, json=body, headers=self._headers)
+        except httpx.TimeoutException as exc:
+            # Meta may or may not have accepted it; retrying risks a duplicate reply, which is
+            # better than a reply that never arrives.
+            raise WhatsAppSendError("timeout", retryable=True) from exc
+        except httpx.HTTPError as exc:
+            raise WhatsAppSendError("network_error", retryable=True) from exc
+
+        if response.is_success:
+            # Accepted. Never raise from here on: a retry would send the message twice.
+            try:
+                message_id = response.json()["messages"][0]["id"]
+            except (ValueError, KeyError, IndexError, TypeError):
+                return None
+            return message_id if isinstance(message_id, str) else None
+        raise _classify_error(response)
+
+    def close(self) -> None:
+        self._client.close()
+
+
+def _classify_error(response: httpx.Response) -> WhatsAppSendError:
+    meta_code = None
+    try:
+        error = response.json().get("error") or {}
+        meta_code = error.get("code")
+    except (ValueError, AttributeError):
+        pass
+    if isinstance(meta_code, int):
+        retryable = meta_code in RETRYABLE_META_ERROR_CODES or response.status_code >= 500
+        return WhatsAppSendError(f"meta_{meta_code}", retryable=retryable)
+    retryable = response.status_code == 429 or response.status_code >= 500
+    return WhatsAppSendError(f"http_{response.status_code}", retryable=retryable)
+
+
+def build_sender(settings: Any) -> OutboundSender:
+    """The real Cloud API sender when credentials are configured, otherwise a local mock.
+
+    Production refuses to start without credentials instead of silently dropping replies.
+    """
+
+    if settings.whatsapp_access_token and settings.whatsapp_phone_number_id:
+        return CloudApiOutboundSender(
+            access_token=settings.whatsapp_access_token,
+            phone_number_id=settings.whatsapp_phone_number_id,
+            graph_api_version=settings.whatsapp_graph_api_version,
+            timeout_seconds=settings.whatsapp_timeout_seconds,
+        )
+    if settings.environment.strip().lower() == "production":
+        raise RuntimeError(
+            "Configure LUCROMEI_WHATSAPP_ACCESS_TOKEN e LUCROMEI_WHATSAPP_PHONE_NUMBER_ID."
+        )
+    logger.warning("whatsapp_mock_sender_in_use")
     return MockOutboundSender()
+
+
+@dataclass(frozen=True, slots=True)
+class WhatsAppStatus:
+    provider_message_id: str
+    status: str
+    occurred_at: datetime | None
+    error_code: str | None
+
+
+DELIVERY_STATUSES = ("sent", "delivered", "read", "failed")
+
+
+def extract_statuses(payload: dict[str, Any]) -> list[WhatsAppStatus]:
+    """Delivery receipts for messages we sent. Recipient numbers are deliberately not kept."""
+
+    statuses: list[WhatsAppStatus] = []
+    for value in _change_values(payload):
+        for item in value.get("statuses") or []:
+            if not isinstance(item, dict):
+                continue
+            message_id = item.get("id")
+            status = item.get("status")
+            if not _is_str(message_id) or status not in DELIVERY_STATUSES:
+                continue
+            error_code = None
+            errors = item.get("errors")
+            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                code = errors[0].get("code")
+                error_code = f"meta_{code}" if isinstance(code, int) else None
+            statuses.append(
+                WhatsAppStatus(
+                    provider_message_id=message_id[:255],
+                    status=status,
+                    occurred_at=_parse_timestamp(item.get("timestamp")),
+                    error_code=error_code,
+                )
+            )
+    return statuses

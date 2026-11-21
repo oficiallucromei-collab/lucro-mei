@@ -29,7 +29,9 @@ This initial scaffold includes:
   `America/Sao_Paulo`), separating the business result (income − expenses) from what is left
   after personal withdrawals;
 - WhatsApp Cloud API webhook verification and signature validation;
-- normalized inbound text messages with mocked outbound confirmations;
+- replies sent through the WhatsApp Cloud API (`httpx`, timeouts, retryable vs permanent Meta
+  errors), with a mock sender for tests and local development, and delivery receipts (sent,
+  delivered, read, failed) recorded from the webhook;
 - background processing: the webhook only validates, records the message once (its Meta ID is
   the idempotency key) and answers 200; a PostgreSQL job queue (`SELECT ... FOR UPDATE SKIP
   LOCKED`) then processes it and sends the reply, with bounded retries and exponential backoff;
@@ -51,6 +53,15 @@ LUCROMEI_TEST_DATABASE_URL=postgresql+psycopg://... pytest   # real PostgreSQL, 
 alembic upgrade head
 uvicorn lucromei.main:app --reload
 ```
+
+### WhatsApp Cloud API
+
+Set `LUCROMEI_WHATSAPP_ACCESS_TOKEN` (a System User token with `whatsapp_business_messaging`)
+and `LUCROMEI_WHATSAPP_PHONE_NUMBER_ID`. Without them replies are only recorded by the mock
+sender; with `LUCROMEI_ENVIRONMENT=production` the app refuses to start. In the Meta app,
+subscribe the webhook to the `messages` field, which carries both user messages and delivery
+receipts. Free-form replies only work within 24 hours of the user's last message; outside that
+window Meta answers with error 131047 and the send is not retried.
 
 ### Background worker
 
@@ -89,7 +100,6 @@ curl -X POST http://127.0.0.1:8000/v1/messages \
 
 ## Roadmap
 
-1. Production WhatsApp outbound sender and delivery observability.
 2. Structured AI fallback for messages that deterministic rules cannot classify.
 3. Minimal onboarding and subscription portal.
 

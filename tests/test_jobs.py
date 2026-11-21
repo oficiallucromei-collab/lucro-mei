@@ -82,7 +82,7 @@ def test_webhook_records_event_and_returns_before_processing() -> None:
     response = post_webhook(whatsapp_payload("wamid.fast", "Recebi 150 por um corte"))
 
     assert response.status_code == 200
-    assert response.json() == {"received": True, "accepted": 1, "duplicates": 0}
+    assert response.json() == {"received": True, "accepted": 1, "duplicates": 0, "statuses": 0}
     assert sent_texts() == []
     with TestingSession() as session:
         event = session.query(InboundEvent).one()
@@ -101,7 +101,7 @@ def test_redelivery_before_processing_creates_a_single_job() -> None:
     post_webhook(payload)
     second = post_webhook(payload)
 
-    assert second.json() == {"received": True, "accepted": 0, "duplicates": 1}
+    assert second.json() == {"received": True, "accepted": 0, "duplicates": 1, "statuses": 0}
     assert len(jobs("process_message")) == 1
     drain_jobs()
     assert len(sent_texts()) == 1
