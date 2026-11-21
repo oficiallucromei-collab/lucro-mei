@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -55,6 +55,19 @@ class Summary:
     period_start: datetime
     period_end: datetime
     totals: PeriodTotals
+
+
+def local_day_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """Return [start, end) of a calendar day in the business's local time zone."""
+    start = datetime.combine(day, time(0), tzinfo=tz)
+    return start, datetime.combine(day + timedelta(days=1), time(0), tzinfo=tz)
+
+
+def local_week_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """Return [Monday, next Monday) of the week containing `day`, in local time."""
+    monday = day - timedelta(days=day.weekday())
+    start = datetime.combine(monday, time(0), tzinfo=tz)
+    return start, datetime.combine(monday + timedelta(days=7), time(0), tzinfo=tz)
 
 
 def local_month_bounds(year: int, month: int, tz: ZoneInfo) -> tuple[datetime, datetime]:
@@ -120,7 +133,7 @@ class LedgerService:
                 "O cadastro e o aceite dos termos precisam ser concluídos antes do primeiro "
                 "lançamento."
             )
-        parsed = parse_transaction(text, now=occurred_at)
+        parsed = parse_transaction(text, now=occurred_at, tz=self.tz)
         inbound = InboundMessage(
             external_id=message_id,
             business_id=business.id,
@@ -262,7 +275,9 @@ class LedgerService:
             select(Transaction)
             .options(selectinload(Transaction.events))
             .where(Transaction.business_id == business.id)
-            .order_by(Transaction.occurred_at.desc(), Transaction.created_at.desc())
+            # The most recently recorded, not the latest date: "desfazer" right after
+            # "ontem recebi 200" must undo that entry.
+            .order_by(Transaction.created_at.desc(), Transaction.occurred_at.desc())
         ).all()
         for transaction in transactions:
             current = effective_transaction(transaction)
@@ -272,8 +287,29 @@ class LedgerService:
                 return current
         return None
 
+    def recent_transactions(
+        self, whatsapp_number: str, limit: int = 10
+    ) -> list[EffectiveTransaction]:
+        """The last entries recorded, newest first, without the ones that were undone."""
+        business = self.find_business(whatsapp_number)
+        if business is None:
+            return []
+        transactions = self.session.scalars(
+            select(Transaction)
+            .options(selectinload(Transaction.events))
+            .where(Transaction.business_id == business.id)
+            .order_by(Transaction.created_at.desc(), Transaction.occurred_at.desc())
+            .limit(limit * 3)
+        ).all()
+        current = [effective_transaction(transaction) for transaction in transactions]
+        return [item for item in current if not item.reversed][:limit]
+
     def monthly_summary(self, whatsapp_number: str, year: int, month: int) -> Summary:
         start, end = local_month_bounds(year, month, self.tz)
+        return self.period_summary(whatsapp_number, start, end)
+
+    def period_summary(self, whatsapp_number: str, start: datetime, end: datetime) -> Summary:
+        """Totals of the entries whose (corrected) date falls in [start, end)."""
         business = self.find_business(whatsapp_number)
         if business is None:
             return Summary(start, end, PeriodTotals(0, 0, 0))

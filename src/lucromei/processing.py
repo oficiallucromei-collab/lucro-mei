@@ -10,7 +10,7 @@ never re-runs the ledger write. Each step is idempotent:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -18,9 +18,9 @@ from sqlalchemy.orm import Session
 
 from lucromei import ai, clarification, onboarding, privacy
 from lucromei.audio import AudioError
-from lucromei.config import get_settings
+from lucromei.config import get_business_timezone, get_settings
 from lucromei.conversation import ConversationService
-from lucromei.domain import AmbiguousTransaction, ParseError
+from lucromei.domain import AmbiguousTransaction, InvalidDate, ParseError
 from lucromei.jobs import JobContext, PermanentJobError, RetryLater, enqueue, insert_ignore, utc_now
 from lucromei.models import (
     AIUsage,
@@ -30,7 +30,7 @@ from lucromei.models import (
     OutboundMessage,
     new_id,
 )
-from lucromei.service import LedgerService
+from lucromei.service import EffectiveTransaction, LedgerService
 from lucromei.whatsapp import (
     OutboundSender,
     WhatsAppSendError,
@@ -230,7 +230,7 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
                 resolution_message_id=event.external_id,
                 transaction_id=transaction.id,
             )
-            return format_confirmation(transaction.transaction_type.value, transaction.amount_cents)
+            return _confirmation(transaction, event.sent_at)
     elif expired is not None and clarification.looks_like_answer(event.text):
         return clarification.EXPIRED_REPLY
 
@@ -238,7 +238,8 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
         message_id=event.external_id,
         whatsapp_number=event.sender,
         text=event.text,
-        now=ctx.now,
+        # Periods ("hoje", "essa semana") are relative to when the user sent the message.
+        now=_aware(event.sent_at),
         commit=False,
     )
     if command is not None:
@@ -260,20 +261,36 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
             source_text=event.text if event.message_type != "audio" else "",
             amount_cents=ambiguity.amount_cents,
             description=ambiguity.description,
-            occurred_at=event.sent_at,
+            occurred_at=ambiguity.occurred_at or event.sent_at,
             candidates=ambiguity.candidates,
             origin="rules",
             now=ctx.now,
             ttl=timedelta(hours=settings.pending_entry_ttl_hours),
         )
         return clarification.question(new_pending)
+    except InvalidDate as exc:
+        return f"{exc} Nada foi anotado."
     except ParseError:
         if pending is not None:
             return "Não entendi a resposta. " + clarification.question(pending)
         return ai_fallback(session, business, event, ctx) or NOT_UNDERSTOOD_REPLY
+    return _confirmation(result.transaction, event.sent_at)
+
+
+def _confirmation(transaction: EffectiveTransaction, sent_at: datetime) -> str:
+    """Confirm an entry, naming its day when it is not the day the message was sent."""
+    tz = get_business_timezone()
+    day = _aware(transaction.occurred_at).astimezone(tz).date()
+    sent_day = _aware(sent_at).astimezone(tz).date()
     return format_confirmation(
-        result.transaction.transaction_type.value, result.transaction.amount_cents
+        transaction.transaction_type.value,
+        transaction.amount_cents,
+        occurred_on=day if day != sent_day else None,
     )
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def ai_fallback(

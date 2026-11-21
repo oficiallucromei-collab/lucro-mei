@@ -1,9 +1,10 @@
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 from lucromei.money import AMOUNT_TOKEN, InvalidAmount, parse_brl_amount
 
@@ -21,6 +22,8 @@ class ParsedTransaction:
     description: str
     occurred_at: datetime
     confidence: Decimal
+    # True when the user named a day other than today ("ontem recebi 200").
+    backdated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +66,10 @@ class ParseError(ValueError):
     """Raised when a message cannot be safely converted into a transaction."""
 
 
+class InvalidDate(ParseError):
+    """The message names a day that cannot be used. The message is safe to show the user."""
+
+
 class AmbiguousTransaction(ParseError):
     """The amount is clear but the type is not: the user must choose among the candidates."""
 
@@ -73,23 +80,107 @@ class AmbiguousTransaction(ParseError):
         amount_cents: int,
         description: str,
         candidates: tuple[TransactionType, ...],
+        occurred_at: datetime | None = None,
     ) -> None:
         super().__init__(message)
         self.amount_cents = amount_cents
         self.description = description
         self.candidates = candidates
+        self.occurred_at = occurred_at
 
 
-def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTransaction:
+# Dates the user can attach to a transaction: "ontem", "anteontem", "dia 15", "15/11",
+# "15/11/2026". Backdated entries are anchored at noon local time so they always fall on the
+# named day, whatever the time zone offset.
+MAX_BACKDATE_DAYS = 366
+FUTURE_MEANS_LAST_YEAR_DAYS = 60
+_RELATIVE_DATE_RE = re.compile(r"(?<!\w)(antes de ontem|anteontem|ontem|hoje)(?!\w)")
+_SLASH_DATE_RE = re.compile(
+    r"(?<![\w/.,])(?:(?:n?o\s+)?dia\s+)?(\d{1,2})/(\d{1,2})(?:/(\d{4}|\d{2}))?(?![\w/.,])"
+)
+_DAY_OF_MONTH_RE = re.compile(r"(?<!\w)(?:n?o\s+)?dia\s+(\d{1,2})(?![\w/.,])")
+_RELATIVE_DAYS = {"hoje": 0, "ontem": 1, "anteontem": 2, "antes de ontem": 2}
+
+
+def extract_date(normalized: str, today: date) -> tuple[date | None, str]:
+    """Find the day a message refers to and return it with the text minus the date words.
+
+    Returns (None, text) when no day is named. Raises ParseError for impossible, future or
+    too old dates, or when more than one day is named.
+    """
+
+    found: list[tuple[re.Match[str], date]] = []
+    for match in _RELATIVE_DATE_RE.finditer(normalized):
+        found.append((match, today - timedelta(days=_RELATIVE_DAYS[match.group(1)])))
+    for match in _SLASH_DATE_RE.finditer(normalized):
+        day, month, year = int(match.group(1)), int(match.group(2)), match.group(3)
+        if year is None:
+            candidate = _safe_date(today.year, month, day)
+            # "25/12" typed in January is last December; "30/11" typed on 21/11 is a mistake.
+            if (candidate - today).days > FUTURE_MEANS_LAST_YEAR_DAYS:
+                candidate = _safe_date(today.year - 1, month, day)
+        else:
+            full_year = int(year) + 2000 if len(year) == 2 else int(year)
+            candidate = _safe_date(full_year, month, day)
+        found.append((match, candidate))
+    slash_spans = [match.span() for match, _ in found]
+    for match in _DAY_OF_MONTH_RE.finditer(normalized):
+        if any(start <= match.start() < end for start, end in slash_spans):
+            continue
+        day = int(match.group(1))
+        year, month = today.year, today.month
+        if day > today.day:
+            year, month = (year - 1, 12) if month == 1 else (year, month - 1)
+        found.append((match, _safe_date(year, month, day)))
+
+    if not found:
+        return None, normalized
+    if len(found) > 1:
+        raise InvalidDate("Informe só uma data por lançamento.")
+    match, day = found[0]
+    if day > today:
+        raise InvalidDate("Não registro lançamentos com data no futuro.")
+    if (today - day).days > MAX_BACKDATE_DAYS:
+        raise InvalidDate("Essa data é antiga demais. Informe uma data do último ano.")
+    remaining = normalized[: match.start()] + " " + normalized[match.end() :]
+    return day, " ".join(remaining.split())
+
+
+def _safe_date(year: int, month: int, day: int) -> date:
+    try:
+        return date(year, month, day)
+    except ValueError as exc:
+        raise InvalidDate("Essa data não existe.") from exc
+
+
+def local_noon(day: date, tz: ZoneInfo) -> datetime:
+    return datetime.combine(day, time(12, 0), tzinfo=tz)
+
+
+def parse_transaction(
+    message: str, *, now: datetime | None = None, tz: ZoneInfo | None = None
+) -> ParsedTransaction:
     """Parse high-confidence Portuguese transaction messages without an LLM.
 
     Ambiguous messages are rejected instead of guessing. A future AI parser can be used only
     as a structured fallback and must satisfy the same validation rules.
+
+    `now` is when the message was sent; a named day ("ontem", "dia 15") moves the transaction
+    to noon of that day in the business's time zone `tz`.
     """
 
+    now = now or datetime.now(UTC)
+    tz = tz or ZoneInfo("America/Sao_Paulo")
     normalized = " ".join(message.lower().strip().split())
     if not normalized:
         raise ParseError("A mensagem está vazia.")
+    aware_now = now if now.tzinfo else now.replace(tzinfo=UTC)
+    today = aware_now.astimezone(tz).date()
+    day, normalized = extract_date(normalized, today)
+    backdated = day is not None and day != today
+    occurred_at = local_noon(day, tz) if backdated else now
+    if not normalized:
+        raise ParseError("Informe o valor do lançamento.")
     folded = _fold_accents(normalized)
 
     # A payment to a person may be a business expense or a personal withdrawal.
@@ -101,6 +192,7 @@ def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTra
             amount_cents=amount_cents,
             description=description,
             candidates=(TransactionType.EXPENSE, TransactionType.WITHDRAWAL),
+            occurred_at=occurred_at,
         )
 
     groups = [
@@ -118,8 +210,9 @@ def parse_transaction(message: str, *, now: datetime | None = None) -> ParsedTra
         transaction_type=detected[0],
         amount_cents=amount_cents,
         description=description,
-        occurred_at=now or datetime.now(UTC),
+        occurred_at=occurred_at,
         confidence=Decimal("1.00"),
+        backdated=backdated,
     )
 
 
