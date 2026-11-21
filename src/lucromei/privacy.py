@@ -316,7 +316,9 @@ def delete_business_data(session: Session, business: Business) -> None:
         delete(AIUsage).where(AIUsage.business_id == business_id),
         delete(TermsAcceptance).where(TermsAcceptance.business_id == business_id),
         delete(Subscription).where(Subscription.business_id == business_id),
-        delete(DeliveryStatusEvent).where(DeliveryStatusEvent.provider_message_id.in_(provider_ids)),
+        delete(DeliveryStatusEvent).where(
+            DeliveryStatusEvent.provider_message_id.in_(provider_ids)
+        ),
         delete(OutboundMessage).where(OutboundMessage.recipient == number),
         delete(InboundEvent).where(InboundEvent.sender == number),
     ]
@@ -329,53 +331,68 @@ def delete_business_data(session: Session, business: Business) -> None:
 # --- retention ----------------------------------------------------------------------------
 
 
-def purge_old_text(session: Session, now: datetime, settings: Settings) -> dict[str, int]:
-    """Erase raw message text older than the retention period and drop old finished jobs."""
+def purge_old_text(
+    session: Session, now: datetime, settings: Settings, *, limit: int | None = None
+) -> dict[str, int]:
+    """Erase raw message text older than the retention period and drop old finished jobs.
+
+    With `limit`, each table is touched in at most `limit` rows per call, so a large backlog is
+    worked through in short statements (see the retention job) instead of one long lock.
+    """
 
     cutoff = now - timedelta(days=settings.message_text_retention_days)
-    results = {
-        "inbound_events": session.execute(
-            update(InboundEvent)
-            .where(InboundEvent.received_at < cutoff, InboundEvent.text.is_not(None))
-            .values(text=None)
-        ).rowcount,
-        "outbound_messages": session.execute(
-            update(OutboundMessage)
-            .where(OutboundMessage.created_at < cutoff, OutboundMessage.text != "")
-            .values(text="")
-        ).rowcount,
-        "command_receipts": session.execute(
-            update(CommandReceipt)
-            .where(CommandReceipt.created_at < cutoff, CommandReceipt.response_text != "")
-            .values(response_text="")
-        ).rowcount,
+    closed_pending = (PendingEntry.created_at < cutoff) & (PendingEntry.status != "open")
+    plans = [
         # Open questions keep their text until they are answered or expire.
-        "pending_entries": session.execute(
-            update(PendingEntry)
-            .where(
-                PendingEntry.created_at < cutoff,
-                PendingEntry.status != "open",
-                PendingEntry.source_text != "",
-            )
-            .values(source_text="")
-        ).rowcount,
-        "pending_batches": session.execute(
-            update(PendingEntry)
-            .where(
-                PendingEntry.created_at < cutoff,
-                PendingEntry.status != "open",
-                PendingEntry.items.is_not(None),
-            )
-            .values(items=None)
-        ).rowcount,
-        "jobs": session.execute(
-            delete(Job).where(
-                ((Job.status == "done") & (Job.finished_at < now - timedelta(days=7)))
-                | ((Job.status == "dead") & (Job.finished_at < cutoff))
-            )
-        ).rowcount,
-    }
+        (
+            "inbound_events",
+            InboundEvent,
+            (InboundEvent.received_at < cutoff) & InboundEvent.text.is_not(None),
+            {"text": None},
+        ),
+        (
+            "outbound_messages",
+            OutboundMessage,
+            (OutboundMessage.created_at < cutoff) & (OutboundMessage.text != ""),
+            {"text": ""},
+        ),
+        (
+            "command_receipts",
+            CommandReceipt,
+            (CommandReceipt.created_at < cutoff) & (CommandReceipt.response_text != ""),
+            {"response_text": ""},
+        ),
+        (
+            "pending_entries",
+            PendingEntry,
+            closed_pending & (PendingEntry.source_text != ""),
+            {"source_text": ""},
+        ),
+        (
+            "pending_batches",
+            PendingEntry,
+            closed_pending & PendingEntry.items.is_not(None),
+            {"items": None},
+        ),
+    ]
+    results = {}
+    for name, model, condition, values in plans:
+        results[name] = session.execute(
+            update(model).where(_bounded(model, condition, limit)).values(**values)
+        ).rowcount
+    old_jobs = ((Job.status == "done") & (Job.finished_at < now - timedelta(days=7))) | (
+        (Job.status == "dead") & (Job.finished_at < cutoff)
+    )
+    results["jobs"] = session.execute(delete(Job).where(_bounded(Job, old_jobs, limit))).rowcount
     return results
+
+
+def _bounded(model, condition, limit: int | None):
+    """`condition`, restricted to at most `limit` rows (by primary key) when a limit is set."""
+    if limit is None:
+        return condition
+    key = list(model.__table__.primary_key.columns)[0]
+    return key.in_(select(key).where(condition).limit(limit).scalar_subquery())
 
 
 def _hash_key(settings: Settings) -> str:

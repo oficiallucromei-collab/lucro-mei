@@ -175,7 +175,7 @@ resource "google_cloud_run_v2_service" "test" {
 
   scaling {
     min_instance_count = 0
-    max_instance_count = 1
+    max_instance_count = var.max_instances
   }
 
   template {
@@ -207,6 +207,12 @@ resource "google_cloud_run_v2_service" "test" {
       env {
         name  = "LUCROMEI_WHATSAPP_PHONE_NUMBER_ID"
         value = "1434742236396843"
+      }
+
+      env {
+        # "off" when the separate worker (worker.tf) processes the queue.
+        name  = "LUCROMEI_WORKER_MODE"
+        value = var.separate_worker ? "off" : "embedded"
       }
 
       env {

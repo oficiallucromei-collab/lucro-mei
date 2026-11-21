@@ -52,6 +52,8 @@ AUDIO_FORMAT_REPLY = "Esse formato de áudio não é compatível. Grave um áudi
 AUDIO_ATTEMPTS = 3
 SEND_MESSAGE = "send_message"
 MAINTENANCE = "maintenance"
+RETENTION = "retention"
+RETENTION_PAUSE_SECONDS = 5
 DELETE_ACCOUNT = "delete_account"
 
 NOT_UNDERSTOOD_REPLY = (
@@ -59,8 +61,7 @@ NOT_UNDERSTOOD_REPLY = (
     "Exemplo: Recebi 150 por um corte. Mande AJUDA para ver mais exemplos."
 )
 TEXT_ONLY_REPLY = (
-    "Por enquanto eu só entendo mensagens de texto. "
-    "Envie, por exemplo: Recebi 150 por um corte."
+    "Por enquanto eu só entendo mensagens de texto. Envie, por exemplo: Recebi 150 por um corte."
 )
 # How long to wait before re-checking when an earlier message from the same sender is pending.
 ORDERING_RETRY_SECONDS = 2.0
@@ -122,8 +123,7 @@ def handle_audio_transcription(session: Session, payload: dict[str, Any], ctx: J
             limit = get_settings().whatsapp_audio_max_duration_seconds
             unit = "segundo" if limit == 1 else "segundos"
             reply = (
-                "Seu áudio ficou um pouco longo. "
-                f"Envie um áudio de até {limit} {unit}, por favor."
+                f"Seu áudio ficou um pouco longo. Envie um áudio de até {limit} {unit}, por favor."
             )
         _reply_to_audio_failure(session, event, reply, ctx.now)
         return
@@ -232,8 +232,8 @@ def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str |
             now=_aware(event.sent_at),
             commit=False,
         )
-        return command.reply if command is not None else subscription.blocked_reply(
-            business, settings
+        return (
+            command.reply if command is not None else subscription.blocked_reply(business, settings)
         )
     pending, expired = clarification.current_pending(session, business, ctx.now)
     if pending is not None and pending.kind == batch.BATCH:
@@ -569,9 +569,44 @@ def handle_maintenance(session: Session, payload: dict[str, Any], ctx: JobContex
         )
     if queued:
         logger.info("notices_queued", extra={"outcome": str(queued)})
-    purged = privacy.purge_old_text(session, ctx.now, settings)
+    enqueue_retention(session, ctx.now, ctx.services["max_attempts"])
+
+
+def enqueue_retention(
+    session: Session,
+    now: datetime,
+    max_attempts: int,
+    *,
+    series: int | None = None,
+    round_: int = 0,
+) -> None:
+    """One retention run; a backlog continues as a series of runs ("<series>:<round>")."""
+    series = int(now.timestamp()) if series is None else series
+    enqueue(
+        session,
+        RETENTION,
+        {"series": series, "round": round_},
+        dedupe_key=f"{RETENTION}:{series}:{round_}",
+        max_attempts=max_attempts,
+        run_after=now,
+    )
+
+
+def handle_retention(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
+    """Erase expired text in bounded batches; schedules itself again while a backlog remains."""
+    settings = get_settings()
+    limit = settings.retention_batch_size
+    purged = privacy.purge_old_text(session, ctx.now, settings, limit=limit)
     summary = ",".join(f"{table}={count}" for table, count in purged.items())
     logger.info("retention_purge", extra={"outcome": summary})
+    if any(count >= limit for count in purged.values()):
+        enqueue_retention(
+            session,
+            ctx.now + timedelta(seconds=RETENTION_PAUSE_SECONDS),
+            ctx.services["max_attempts"],
+            series=payload.get("series"),
+            round_=int(payload.get("round", 0)) + 1,
+        )
 
 
 def handle_delete_account(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
@@ -602,6 +637,7 @@ HANDLERS = {
     TRANSCRIBE_AUDIO: handle_audio_transcription,
     SEND_MESSAGE: handle_send_message,
     MAINTENANCE: handle_maintenance,
+    RETENTION: handle_retention,
     DELETE_ACCOUNT: handle_delete_account,
 }
 DEAD_HOOKS = {
