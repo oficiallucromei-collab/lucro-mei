@@ -199,7 +199,7 @@ resource "google_cloud_run_v2_service" "test" {
 
       env {
         name  = "LUCROMEI_WHATSAPP_PHONE_NUMBER_ID"
-        value = "1433058046563073"
+        value = "1434742236396843"
       }
 
       env {
