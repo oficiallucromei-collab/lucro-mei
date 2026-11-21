@@ -39,7 +39,8 @@ from lucromei.processing import enqueue_maintenance
 OTHER = "5531977776666"
 # Ahead of the real clock: jobs are enqueued with the real time and run here at START, so a
 # fixed START in the past would leave them never due (this broke on 2026-11-21 15:00 UTC).
-START = (datetime.now(UTC) + timedelta(minutes=30)).replace(second=0, microsecond=0)
+# Also on the hour, so "START + 30 minutes" stays in the same hourly maintenance interval.
+START = (datetime.now(UTC) + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
 DELETION_DAY = (START + timedelta(days=7)).astimezone(ZoneInfo("America/Sao_Paulo")).strftime(
     "%d/%m/%Y"
 )
