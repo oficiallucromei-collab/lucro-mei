@@ -38,9 +38,10 @@ jobs:
         run: python -m pip install -e '.[dev]'
       - name: Lint
         run: ruff check .
-      - name: Migrations apply and roll back on PostgreSQL
+      - name: Apply, check, and roll back migrations on PostgreSQL
         run: |
           alembic upgrade head
+          alembic check
           alembic downgrade base
       - name: Tests on PostgreSQL
         run: pytest --cov=lucromei --cov-report=term-missing
