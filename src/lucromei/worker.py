@@ -9,8 +9,13 @@ from sqlalchemy.orm import sessionmaker
 from lucromei.ai import MessageInterpreter, build_interpreter
 from lucromei.config import Settings, get_settings
 from lucromei.jobs import JobContext, JobQueue, utc_now
-from lucromei.observability import configure_logging, init_sentry
-from lucromei.processing import DEAD_HOOKS, HANDLERS
+from lucromei.observability import (
+    configure_logging,
+    correlation_id,
+    init_sentry,
+    new_correlation_id,
+)
+from lucromei.processing import DEAD_HOOKS, HANDLERS, enqueue_maintenance
 from lucromei.whatsapp import OutboundSender
 
 logger = logging.getLogger(__name__)
@@ -42,6 +47,7 @@ class Worker:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._maintenance_bucket: int | None = None
 
     def context(self) -> JobContext:
         return JobContext(
@@ -55,7 +61,28 @@ class Worker:
 
     def run_once(self) -> int:
         """Claim and run one batch of due jobs. Returns how many were claimed."""
-        return self.queue.run_due(self.context(), limit=self.settings.worker_batch_size)
+        context = self.context()
+        self.schedule_maintenance(context.now)
+        return self.queue.run_due(context, limit=self.settings.worker_batch_size)
+
+    def schedule_maintenance(self, now) -> None:
+        """Enqueue the periodic maintenance job (deduplicated per interval across workers)."""
+        bucket = int(now.timestamp()) // self.settings.maintenance_interval_seconds
+        if bucket == self._maintenance_bucket:
+            return
+        token = correlation_id.set(new_correlation_id())  # its own ID: no request created it
+        try:
+            self._enqueue_maintenance(now)
+        finally:
+            correlation_id.reset(token)
+        self._maintenance_bucket = bucket
+
+    def _enqueue_maintenance(self, now) -> None:
+        with self.queue.session_factory() as session:
+            enqueue_maintenance(
+                session, now, interval_seconds=self.settings.maintenance_interval_seconds
+            )
+            session.commit()
 
     def drain(self, max_batches: int = 100) -> int:
         """Run batches until nothing is due. Used by tests and the one-shot CLI."""

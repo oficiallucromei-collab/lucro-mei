@@ -65,6 +65,10 @@ def reset_state() -> None:
     settings.ai_api_key = ""  # tests never call a real model
     settings.ai_daily_calls_per_business = 30
     settings.ai_max_input_chars = 300
+    settings.message_text_retention_days = 90
+    settings.deletion_grace_days = 7
+    settings.deletion_confirm_minutes = 10
+    settings.privacy_hash_key = "test-privacy-key-0123456789abcdef"
     app.state.whatsapp_sender = MockOutboundSender()
     app.state.worker = None
 

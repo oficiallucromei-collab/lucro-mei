@@ -105,10 +105,12 @@ def test_message_flow_logs_share_correlation_id_and_contain_no_user_data(logs) -
     events = {entry["event"] for entry in entries}
     assert {"http_request", "whatsapp_webhook_received", "job_done"} <= events
     for entry in entries:
-        if entry["event"] in {"http_request", "whatsapp_webhook_received", "job_done"}:
+        if entry["event"] in {"http_request", "whatsapp_webhook_received"} or entry.get(
+            "job_kind"
+        ) in {"process_message", "send_message"}:
             assert entry["correlation_id"] == "req-abc12345", entry
     job_kinds = {entry.get("job_kind") for entry in entries if entry["event"] == "job_done"}
-    assert job_kinds == {"process_message", "send_message"}
+    assert {"process_message", "send_message"} <= job_kinds
     assert_private(logs.lines)
 
 

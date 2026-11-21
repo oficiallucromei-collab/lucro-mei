@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     sentry_dsn: str = Field(default="", repr=False)
     sentry_traces_sample_rate: float = 0.0
+    # Privacy (LGPD). Raw message text is kept for this many days, then erased; ledger entries
+    # stay while the account exists. Deletion requests wait a grace period before running.
+    message_text_retention_days: int = 90
+    deletion_grace_days: int = 7
+    deletion_confirm_minutes: int = 10
+    # HMAC key for the anonymous proof kept after an account is erased (32+ chars in production).
+    privacy_hash_key: str = Field(default="", repr=False)
+    maintenance_interval_seconds: int = 3600
     # Background worker that processes received messages and sends replies. "embedded" runs it
     # inside the web process; "off" leaves it to `python -m lucromei.worker`.
     worker_mode: str = "embedded"
@@ -79,6 +87,8 @@ def check_production_settings(settings: Settings) -> None:
         missing.append("LUCROMEI_WHATSAPP_APP_SECRET")
     if not is_configured_secret(settings.whatsapp_verify_token):
         missing.append("LUCROMEI_WHATSAPP_VERIFY_TOKEN")
+    if len(settings.privacy_hash_key) < 32:
+        missing.append("LUCROMEI_PRIVACY_HASH_KEY (32+ caracteres)")
     if not settings.terms_url.startswith("https://"):
         missing.append("LUCROMEI_TERMS_URL (https)")
     if missing:
