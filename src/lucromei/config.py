@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # HMAC key for the anonymous proof kept after an account is erased (32+ chars in production).
     privacy_hash_key: str = Field(default="", repr=False)
     maintenance_interval_seconds: int = 3600
+    # Abuse guards on the public webhook (per instance; see ratelimit.py).
+    webhook_requests_per_minute: int = Field(default=600, ge=1)
+    webhook_invalid_signatures_per_minute: int = Field(default=20, ge=1)
+    webhook_max_body_bytes: int = Field(default=256 * 1024, ge=1024)
     # Background worker that processes received messages and sends replies. "embedded" runs it
     # inside the web process; "off" leaves it to `python -m lucromei.worker`.
     worker_mode: str = "embedded"

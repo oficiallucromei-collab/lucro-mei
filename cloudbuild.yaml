@@ -25,6 +25,8 @@ steps:
       - |
         [[ "$$RELEASE_PROJECT" == "lucro-mei" ]]
         [[ "$$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+        # When releases overlap, the deploy step uses this to never replace a newer one.
+        date -u +%Y%m%d%H%M%S > /workspace/release-started
         python -m pip install '.[dev]'
         python -m ruff check src tests
         python -m pytest
@@ -78,7 +80,15 @@ steps:
       - |
         [[ "$_DEPLOY" == "true" ]] || { echo "Skipping: _DEPLOY=$_DEPLOY"; exit 0; }
         image="$$(cat /workspace/image-digest)"
-        gcloud run services update $_SERVICE --region=$_REGION --image="$$image" --quiet
+        started="$$(cat /workspace/release-started)"
+        current="$$(gcloud run services describe $_SERVICE --region=$_REGION \
+          --format='value(metadata.labels.lucromei-release-started)')"
+        if [[ -n "$$current" && "$$current" > "$$started" ]]; then
+          echo "A newer release ($$current) is already deployed; keeping it."
+          exit 0
+        fi
+        gcloud run services update $_SERVICE --region=$_REGION --image="$$image" \
+          --update-labels="lucromei-release-started=$$started" --quiet
         # Operator tools follow the release; skipped where the job does not exist.
         if gcloud run jobs describe $_OPS_JOB --region=$_REGION >/dev/null 2>&1; then
           gcloud run jobs update $_OPS_JOB --region=$_REGION --image="$$image" --quiet

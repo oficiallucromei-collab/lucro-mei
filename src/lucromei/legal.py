@@ -201,3 +201,28 @@ senhas, códigos de verificação ou dados bancários pelo WhatsApp.</p>
 <p>Se esta política mudar de forma importante, avisaremos pelo WhatsApp antes.</p>
 """
     return _page("Política de Privacidade do LucroMEI", body, settings)
+
+
+def deletion_html(settings: Settings) -> str:
+    """Data deletion instructions, the page Meta asks for in the app settings."""
+    contact = _contact(settings)
+    body = f"""
+<p>Você pode apagar todos os seus dados do LucroMEI a qualquer momento, pelo próprio WhatsApp.</p>
+<h2>Como pedir</h2>
+<ol>
+<li>Mande <code>APAGAR MEUS DADOS</code> para o número do LucroMEI.</li>
+<li>Confirme respondendo <code>APAGAR</code> em até {settings.deletion_confirm_minutes}
+minutos.</li>
+<li>Pronto. Sua conta fica bloqueada e tudo é apagado {settings.deletion_grace_days} dias
+depois. Para desistir nesse prazo, mande <code>CANCELAR EXCLUSÃO</code>.</li>
+</ol>
+<p>Se quiser uma cópia antes, mande <code>MEUS DADOS</code>.</p>
+<h2>O que é apagado</h2>
+<p>Cadastro, lançamentos, histórico de mensagens, perguntas pendentes, registros de uso e o
+aceite dos termos. Fica só uma prova anônima de que o pedido foi atendido, que não permite
+descobrir o seu número. Cópias de segurança expiram em até 30 dias.</p>
+<h2>Sem acesso ao WhatsApp?</h2>
+<p>Fale conosco {contact}, informando o número usado no LucroMEI.</p>
+<p>Mais detalhes na <a href="/privacidade">Política de Privacidade</a>.</p>
+"""
+    return _page("Como apagar seus dados do LucroMEI", body, settings)

@@ -42,7 +42,7 @@ resource "google_cloud_run_v2_job" "migrate" {
           value_source {
             secret_key_ref {
               secret  = google_secret_manager_secret.app[local.migrate_database_secret].secret_id
-              version = "1"
+              version = lookup(local.secret_versions, "LUCROMEI_MIGRATE_DATABASE_URL", "1")
             }
           }
         }

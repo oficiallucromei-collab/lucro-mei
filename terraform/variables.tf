@@ -20,6 +20,7 @@ variable "secret_versions" {
       contains([
         "LUCROMEI_DATABASE_URL",
         "LUCROMEI_INTERNAL_API_KEY",
+        "LUCROMEI_MIGRATE_DATABASE_URL",
         "LUCROMEI_PRIVACY_HASH_KEY",
         "LUCROMEI_WHATSAPP_ACCESS_TOKEN",
         "LUCROMEI_WHATSAPP_APP_SECRET",
