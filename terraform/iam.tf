@@ -29,3 +29,33 @@ resource "google_project_iam_member" "cloudbuild_agent_secret_admin" {
   role    = "roles/secretmanager.admin"
   member  = local.cloudbuild_service_agent
 }
+
+# Project roles of the account that operates this project (Terraform, gcloud, releases).
+# roles/owner is granted only temporarily by hand and is deliberately not tracked.
+# Changing these needs an IAM admin; this account cannot grant itself roles.
+locals {
+  operator = "user:oficiallucromei@gmail.com"
+
+  operator_roles = toset([
+    "roles/artifactregistry.admin",
+    "roles/cloudbuild.builds.editor",
+    "roles/cloudbuild.connectionViewer",
+    "roles/iam.securityReviewer", # read IAM policies, so plans of this file work
+    "roles/iam.serviceAccountCreator",
+    "roles/iam.serviceAccountUser",
+    "roles/logging.logWriter",
+    "roles/logging.viewer",
+    "roles/run.admin",
+    "roles/secretmanager.admin",
+    "roles/serviceusage.serviceUsageConsumer",
+    "roles/storage.admin",
+  ])
+}
+
+resource "google_project_iam_member" "operator" {
+  for_each = local.operator_roles
+
+  project = local.project_id
+  role    = each.key
+  member  = local.operator
+}

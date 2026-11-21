@@ -47,11 +47,17 @@ Every grant is tracked here. `iam.tf` holds the ones that need IAM admin rights:
 - `roles/logging.logWriter` on the project for `lucromei-build`;
 - `roles/iam.serviceAccountUser` on `lucromei-runtime` for `lucromei-build`;
 - `roles/secretmanager.admin` on the project for the Cloud Build service agent, which
-  stores the GitHub connection's token.
+  stores the GitHub connection's token;
+- the project roles of the operator account, `oficiallucromei@gmail.com`
+  (`local.operator_roles`). The list keeps no role that another listed role already
+  covers.
 
-Changing these needs an IAM admin (for example Owner). Planning them needs
-`getIamPolicy` on the project and on `lucromei-runtime`, so the account that runs
-plans also needs a read-only IAM role such as `roles/iam.securityReviewer`.
+Not tracked: `roles/owner`, which is only granted temporarily by hand; other human
+owners; and the service agents and default service accounts Google manages.
+
+Changing these grants needs an IAM admin (for example Owner); the operator account
+cannot grant itself roles. Planning them needs `getIamPolicy`, which the operator
+gets from `roles/iam.securityReviewer`.
 
 ## Release pipeline
 
