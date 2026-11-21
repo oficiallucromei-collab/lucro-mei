@@ -340,3 +340,16 @@ def test_openapi_schema_and_docs_only_exist_locally() -> None:
     assert openapi_url_for(" Local ") == "/openapi.json"
     assert openapi_url_for("production") is None
     assert openapi_url_for("staging") is None
+
+
+def test_plain_postgresql_urls_use_psycopg3() -> None:
+    from lucromei.config import Settings, normalize_database_url
+
+    assert normalize_database_url("postgresql://u:p@h/db?sslmode=require") == (
+        "postgresql+psycopg://u:p@h/db?sslmode=require"
+    )
+    assert normalize_database_url("postgres://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    assert normalize_database_url("postgresql+psycopg://u@h/db") == "postgresql+psycopg://u@h/db"
+    assert normalize_database_url("sqlite:///x.db") == "sqlite:///x.db"
+    settings = Settings(_env_file=None, database_url="postgresql://u:p@h/db")
+    assert settings.database_url == "postgresql+psycopg://u:p@h/db"

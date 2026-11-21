@@ -223,6 +223,7 @@ def test_production_requires_terms_url() -> None:
         whatsapp_app_secret="real-secret",
         whatsapp_verify_token="real-token",
         terms_url="",
+        privacy_hash_key="k" * 32,
     )
     with pytest.raises(RuntimeError, match="LUCROMEI_TERMS_URL"):
         check_production_settings(settings)

@@ -256,3 +256,29 @@ class AIUsage(Base):
     # understood | not_a_transaction | rejected | refused | error
     outcome: Mapped[str] = mapped_column(String(30), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DeletionRequest(Base):
+    """A user's request to erase all their data (LGPD), and the proof that it was carried out.
+
+    No foreign key and no phone number: the row outlives the business it describes.
+    `subject_digest` is an HMAC of the WhatsApp number, enough to show that a given person's
+    request was handled without keeping the number itself.
+    """
+
+    __tablename__ = "deletion_requests"
+    __table_args__ = (
+        Index("ix_deletion_requests_status_scheduled", "status", "scheduled_for"),
+        Index("ix_deletion_requests_business", "business_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    business_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    subject_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    # awaiting_confirmation -> scheduled -> completed, or expired / cancelled
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirm_by: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

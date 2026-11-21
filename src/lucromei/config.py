@@ -1,7 +1,7 @@
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PLACEHOLDER_SECRET = "change-me"
@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     sentry_dsn: str = Field(default="", repr=False)
     sentry_traces_sample_rate: float = 0.0
+    # Privacy (LGPD). Raw message text is kept for this many days, then erased; ledger entries
+    # stay while the account exists. Deletion requests wait a grace period before running.
+    message_text_retention_days: int = 90
+    deletion_grace_days: int = 7
+    deletion_confirm_minutes: int = 10
+    # HMAC key for the anonymous proof kept after an account is erased (32+ chars in production).
+    privacy_hash_key: str = Field(default="", repr=False)
+    maintenance_interval_seconds: int = 3600
     # Background worker that processes received messages and sends replies. "embedded" runs it
     # inside the web process; "off" leaves it to `python -m lucromei.worker`.
     worker_mode: str = "embedded"
@@ -54,6 +62,22 @@ class Settings(BaseSettings):
     job_max_attempts: int = 8
     # Must be longer than the slowest job (the WhatsApp HTTP timeout).
     job_lease_seconds: int = 120
+
+    @field_validator("database_url")
+    @classmethod
+    def _use_psycopg3(cls, value: str) -> str:
+        return normalize_database_url(value)
+
+
+def normalize_database_url(url: str) -> str:
+    """Use psycopg 3 for plain PostgreSQL URLs, as Neon and most providers hand them out.
+
+    SQLAlchemy reads "postgresql://" as the psycopg2 driver, which is not installed.
+    """
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix) :]
+    return url
 
 
 def is_configured_secret(value: str) -> bool:
@@ -79,6 +103,8 @@ def check_production_settings(settings: Settings) -> None:
         missing.append("LUCROMEI_WHATSAPP_APP_SECRET")
     if not is_configured_secret(settings.whatsapp_verify_token):
         missing.append("LUCROMEI_WHATSAPP_VERIFY_TOKEN")
+    if len(settings.privacy_hash_key) < 32:
+        missing.append("LUCROMEI_PRIVACY_HASH_KEY (32+ caracteres)")
     if not settings.terms_url.startswith("https://"):
         missing.append("LUCROMEI_TERMS_URL (https)")
     if missing:

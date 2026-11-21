@@ -119,7 +119,8 @@ def terms_message(settings: Settings) -> str:
         f"Política de Privacidade (versão {settings.terms_version}). "
         + _terms_link_sentence(settings)
         + "\n\nResumindo: eu guardo os lançamentos que você me mandar para calcular seus "
-        "resumos. Não dou orientação contábil, fiscal nem de investimentos.\n\n"
+        "resumos. Não dou orientação contábil, fiscal nem de investimentos. Quando quiser, "
+        "mande MEUS DADOS para ver tudo o que guardo ou APAGAR MEUS DADOS para apagar.\n\n"
         "Se você concorda, responda ACEITO."
     )
 

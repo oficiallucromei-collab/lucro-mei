@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from lucromei import ai, clarification, onboarding
+from lucromei import ai, clarification, onboarding, privacy
 from lucromei.config import get_settings
 from lucromei.conversation import ConversationService
 from lucromei.domain import AmbiguousTransaction, ParseError
@@ -41,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 PROCESS_MESSAGE = "process_message"
 SEND_MESSAGE = "send_message"
+MAINTENANCE = "maintenance"
+DELETE_ACCOUNT = "delete_account"
 
 NOT_UNDERSTOOD_REPLY = (
     "Não entendi se isso é entrada, despesa ou retirada. Envie uma operação por mensagem."
@@ -78,25 +80,33 @@ def handle_process_message(session: Session, payload: dict[str, Any], ctx: JobCo
         raise RetryLater(ORDERING_RETRY_SECONDS)
 
     reply = build_reply(session, event, ctx)
-    queue_reply(
-        session,
-        recipient=event.sender,
-        in_reply_to=event.external_id,
-        text=reply,
-        max_attempts=ctx.services["max_attempts"],
-        now=ctx.now,
-    )
+    parts = [reply] if isinstance(reply, str) else reply
+    for index, text in enumerate(parts, 1):
+        queue_reply(
+            session,
+            recipient=event.sender,
+            in_reply_to=_part_key(event.external_id, index),
+            text=text,
+            max_attempts=ctx.services["max_attempts"],
+            now=ctx.now,
+        )
     event.status = "processed"
     event.processed_at = ctx.now
 
 
-def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str:
+def build_reply(session: Session, event: InboundEvent, ctx: JobContext) -> str | list[str]:
+    """The reply to one message: a single text, or several parts sent in order."""
     if event.text is None:
         return TEXT_ONLY_REPLY
     ledger = LedgerService(session)
     business = ledger.get_or_create_business(event.sender)
     # Serialize conversation state changes for this business across workers.
     session.refresh(business, with_for_update=True)
+    privacy_reply = privacy.handle(
+        session, business, text=event.text, now=ctx.now, settings=get_settings()
+    )
+    if privacy_reply is not None:
+        return privacy_reply.parts
     if not onboarding.is_active(business):
         return onboarding.handle(
             session,
@@ -285,6 +295,8 @@ def handle_send_message(session: Session, payload: dict[str, Any], ctx: JobConte
         raise PermanentJobError("outbound_message_missing")
     if outbound.status != "queued":
         return
+    if (previous := _previous_part(session, outbound)) is not None and previous.status == "queued":
+        raise RetryLater(1.0)  # parts of a long reply go out in order
     sender: OutboundSender = ctx.services["sender"]
     try:
         provider_message_id = sender.send_text(outbound.recipient, outbound.text)
@@ -298,6 +310,55 @@ def handle_send_message(session: Session, payload: dict[str, Any], ctx: JobConte
     outbound.provider_message_id = provider_message_id
     outbound.error_code = None
     outbound.sent_at = ctx.now
+
+
+def _part_key(external_id: str, index: int) -> str:
+    """Reply key: the inbound message ID for the first part, "<id>#<n>" for the next ones."""
+    return external_id if index == 1 else f"{external_id}#{index}"
+
+
+def _previous_part(session: Session, outbound: OutboundMessage) -> OutboundMessage | None:
+    key = outbound.in_reply_to or ""
+    base, separator, index = key.rpartition("#")
+    if not separator or not index.isdigit() or int(index) < 2:
+        return None
+    previous_key = base if int(index) == 2 else f"{base}#{int(index) - 1}"
+    return session.scalar(
+        select(OutboundMessage).where(OutboundMessage.in_reply_to == previous_key)
+    )
+
+
+def enqueue_maintenance(session: Session, now: datetime, *, interval_seconds: int) -> bool:
+    """Schedule this period's maintenance once, however many workers ask for it."""
+    bucket = int(now.timestamp()) // interval_seconds
+    return enqueue(
+        session,
+        MAINTENANCE,
+        {},
+        dedupe_key=f"{MAINTENANCE}:{interval_seconds}:{bucket}",
+        max_attempts=3,
+        run_after=now,
+    )
+
+
+def handle_maintenance(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
+    settings = get_settings()
+    for request_id in privacy.due_deletions(session, ctx.now):
+        enqueue(
+            session,
+            DELETE_ACCOUNT,
+            {"deletion_request_id": request_id},
+            dedupe_key=f"{DELETE_ACCOUNT}:{request_id}",
+            max_attempts=ctx.services["max_attempts"],
+            run_after=ctx.now,
+        )
+    purged = privacy.purge_old_text(session, ctx.now, settings)
+    summary = ",".join(f"{table}={count}" for table, count in purged.items())
+    logger.info("retention_purge", extra={"outcome": summary})
+
+
+def handle_delete_account(session: Session, payload: dict[str, Any], ctx: JobContext) -> None:
+    privacy.execute_deletion(session, payload["deletion_request_id"], ctx.now)
 
 
 def mark_event_failed(session: Session, payload: dict[str, Any], error: str) -> None:
@@ -316,7 +377,12 @@ def mark_outbound_failed(session: Session, payload: dict[str, Any], error: str) 
         outbound.error_code = error.split(":", 1)[-1][:64]
 
 
-HANDLERS = {PROCESS_MESSAGE: handle_process_message, SEND_MESSAGE: handle_send_message}
+HANDLERS = {
+    PROCESS_MESSAGE: handle_process_message,
+    SEND_MESSAGE: handle_send_message,
+    MAINTENANCE: handle_maintenance,
+    DELETE_ACCOUNT: handle_delete_account,
+}
 DEAD_HOOKS = {PROCESS_MESSAGE: mark_event_failed, SEND_MESSAGE: mark_outbound_failed}
 
 

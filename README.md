@@ -49,6 +49,11 @@ This initial scaffold includes:
   jobs; logs never include message text, amounts, names or phone numbers (allowlisted fields,
   exception messages dropped); optional Sentry via `LUCROMEI_SENTRY_DSN`, without PII, local
   variables or request bodies;
+- privacy (LGPD) over WhatsApp: "meus dados" returns everything stored about the user, and
+  "apagar meus dados" (confirmed with APAGAR) blocks the account for 7 days, during which the
+  user can cancel, then erases every row tied to them, keeping only an anonymous HMAC-based
+  proof; an hourly maintenance job (deduplicated across workers) runs due deletions, erases raw
+  message text after 90 days and removes old finished jobs;
 - onboarding on first contact: name, type of business, acceptance of the terms (version and
   date stored in `terms_acceptances`) and the start of a 14-day free trial; nothing is written
   to the ledger before the terms are accepted;
