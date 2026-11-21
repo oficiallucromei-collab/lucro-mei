@@ -46,3 +46,9 @@ variable "contact_email" {
   type        = string
   default     = "oficiallucromei@gmail.com"
 }
+
+variable "notifications_enabled" {
+  description = "Send proactive notices (end of trial). Turn on only after the Meta templates are approved."
+  type        = bool
+  default     = false
+}

@@ -219,6 +219,12 @@ resource "google_cloud_run_v2_service" "test" {
         value = var.contact_email
       }
 
+      env {
+        # Proactive notices need the templates in docs/whatsapp-templates.md approved at Meta.
+        name  = "LUCROMEI_NOTIFICATIONS_ENABLED"
+        value = tostring(var.notifications_enabled)
+      }
+
       dynamic "env" {
         for_each = local.secret_env
 

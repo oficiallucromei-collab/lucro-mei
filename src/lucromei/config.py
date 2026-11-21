@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     trial_enforcement_enabled: bool = True
     # Monthly price shown to users, in centavos. No charge happens without a payment provider.
     subscription_price_cents: int = Field(default=2490, ge=0)
+    # Proactive notices (end of trial, reminders), sent by the hourly maintenance job. Off until
+    # the templates in templates.py are approved at Meta. Only between these local hours.
+    notifications_enabled: bool = False
+    reminders_enabled: bool = False
+    reminder_inactive_days: int = Field(default=7, ge=1)
+    notification_start_hour: int = Field(default=9, ge=0, le=23)
+    notification_end_hour: int = Field(default=20, ge=1, le=24)
     # How long a question such as "despesa ou retirada?" stays open before it expires.
     pending_entry_ttl_hours: int = 24
     # AI fallback for messages the rules cannot read. Off unless an API key is set. The AI only

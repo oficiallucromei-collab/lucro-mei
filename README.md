@@ -77,6 +77,12 @@ This initial scaffold includes:
   commands keep working); "ASSINAR" records the request in `subscriptions` and, only when a
   payment provider is configured, answers with its checkout link; nothing is charged here;
   `LUCROMEI_TRIAL_ENFORCEMENT_ENABLED` and `LUCROMEI_SUBSCRIPTION_PRICE_CENTS` (2490);
+- proactive notices outside the 24-hour window through approved Meta templates
+  (`templates.py`, `notifications.py`, `docs/whatsapp-templates.md`): end-of-trial notices and
+  optional inactivity reminders, queued by the hourly maintenance job once per key, only
+  between 9h and 20h local time, never to accounts being erased; plain text when the window is
+  still open; PARAR LEMBRETES / VOLTAR LEMBRETES; off unless
+  `LUCROMEI_NOTIFICATIONS_ENABLED` (and `LUCROMEI_REMINDERS_ENABLED`) are true;
 - unit and API tests;
 - Docker and PostgreSQL development configuration.
 
