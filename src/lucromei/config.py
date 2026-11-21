@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # Contact for support and LGPD requests, shown in the published terms and policy.
     contact_email: str = ""
     trial_days: int = 14
+    # After the trial, new entries need an active subscription (summaries, corrections and the
+    # privacy commands keep working). Turn off to keep everyone on the trial terms.
+    trial_enforcement_enabled: bool = True
+    # Monthly price shown to users, in centavos. No charge happens without a payment provider.
+    subscription_price_cents: int = Field(default=2490, ge=0)
     # How long a question such as "despesa ou retirada?" stays open before it expires.
     pending_entry_ttl_hours: int = 24
     # AI fallback for messages the rules cannot read. Off unless an API key is set. The AI only

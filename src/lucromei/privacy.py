@@ -31,12 +31,14 @@ from lucromei.models import (
     Job,
     OutboundMessage,
     PendingEntry,
+    Subscription,
     TermsAcceptance,
     Transaction,
     TransactionEvent,
 )
 from lucromei.money import format_brl
 from lucromei.service import effective_transaction
+from lucromei.subscription import export_lines as subscription_export_lines
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +213,7 @@ def export_parts(
             f"{_local_date(business.trial_ends_at)}"
         )
 
+    lines += subscription_export_lines(session, business, now)
     transactions = session.scalars(
         select(Transaction)
         .options(selectinload(Transaction.events))
@@ -312,6 +315,7 @@ def delete_business_data(session: Session, business: Business) -> None:
         delete(CommandReceipt).where(CommandReceipt.business_id == business_id),
         delete(AIUsage).where(AIUsage.business_id == business_id),
         delete(TermsAcceptance).where(TermsAcceptance.business_id == business_id),
+        delete(Subscription).where(Subscription.business_id == business_id),
         delete(DeliveryStatusEvent).where(DeliveryStatusEvent.provider_message_id.in_(provider_ids)),
         delete(OutboundMessage).where(OutboundMessage.recipient == number),
         delete(InboundEvent).where(InboundEvent.sender == number),

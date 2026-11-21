@@ -291,3 +291,31 @@ class DeletionRequest(Base):
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Subscription(Base):
+    """A business's paid plan after the free trial. One row per subscription attempt.
+
+    requested -> pending_payment -> active -> past_due / canceled / expired. Only "active" with
+    a current_period_end in the future gives access after the trial. Status changes are driven
+    by the payment provider's signed webhooks or by an operator ("manual").
+    """
+
+    __tablename__ = "subscriptions"
+    __table_args__ = (
+        Index("ix_subscriptions_business_status", "business_id", "status"),
+        CheckConstraint("price_cents >= 0", name="ck_subscriptions_price"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # none (no provider yet) | stripe | manual
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="none")
+    provider_customer_id: Mapped[str | None] = mapped_column(String(255))
+    provider_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    provider_checkout_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
