@@ -47,7 +47,7 @@ locals {
 
   # Versions in use when they are not 1. var.secret_versions overrides these per release.
   pinned_secret_versions = {
-    LUCROMEI_WHATSAPP_ACCESS_TOKEN = "2"
+    LUCROMEI_WHATSAPP_ACCESS_TOKEN = "3"
   }
   secret_versions = merge(local.pinned_secret_versions, var.secret_versions)
 
