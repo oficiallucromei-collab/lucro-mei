@@ -25,8 +25,8 @@ CHECKS = [
     ),
     (
         "Respostas (período) por status e erro",
-        "SELECT status, coalesce(error_code, '-'), count(*) "
-        "FROM outbound_messages WHERE created_at >= :since GROUP BY 1, 2",
+        "SELECT status, coalesce(error_code, '-'), coalesce(template_name, 'texto'), count(*) "
+        "FROM outbound_messages WHERE created_at >= :since GROUP BY 1, 2, 3",
     ),
     (
         "Recibos de entrega (período) por status e erro",
